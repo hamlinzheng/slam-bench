@@ -1,0 +1,9 @@
+[submodule "systems/FAST_LIO"]
+	path = systems/FAST_LIO
+	url = https://github.com/hku-mars/FAST_LIO.git
+[submodule "systems/faster-lio"]
+	path = systems/faster-lio
+	url = https://github.com/gaoxiang12/faster-lio.git
+[submodule "systems/livox_ros_driver"]
+	path = systems/livox_ros_driver
+	url = https://github.com/Livox-SDK/livox_ros_driver.git
