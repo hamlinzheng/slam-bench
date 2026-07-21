@@ -1,0 +1,24 @@
+# Output Adapter Table (plan §5.2) — the ONLY system-specific glue in the pipeline.
+# Everything downstream (drift, map, resource metrics) reads the normalized artifacts
+# and does not know which system produced them. scripts/run_system.sh currently mirrors
+# the odom_topic / process fields here in a case statement; keep the two in sync (a
+# future run_system reads this file directly).
+#
+# registered_cloud is not consumed yet (map artifact ② accumulation is a later stage);
+# verify the exact topic name on first run before relying on it.
+
+fast_lio:
+  group: A                       # pure LIO odometry (no loop closure / backend)
+  ws: /ws/fast_lio
+  launch: configs/launch/fast_lio.launch
+  odom_topic: /Odometry          # nav_msgs/Odometry, frame: camera_init
+  registered_cloud: /cloud_registered
+  process: fastlio_mapping
+
+faster_lio:
+  group: A
+  ws: /ws/faster_lio
+  launch: configs/launch/faster_lio.launch
+  odom_topic: /Odometry          # nav_msgs/Odometry
+  registered_cloud: /cloud_registered
+  process: run_mapping_online

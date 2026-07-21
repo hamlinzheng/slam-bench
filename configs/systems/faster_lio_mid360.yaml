@@ -1,0 +1,44 @@
+# Override of faster-lio/config/mid360.yaml for the slam-bench rig.
+# ONLY plumbing changed vs upstream (fairness §9): lid_topic/imu_topic point to our
+# bag's topics and pcd_save is disabled (map artifact ② is accumulated externally).
+# All algorithm parameters are left at upstream defaults.
+common:
+    lid_topic: "/sensing/front/livox/lidar"
+    imu_topic: "/sensing/front/livox/imu"
+    time_sync_en: false
+
+preprocess:
+    lidar_type: 1                # 1 = Livox
+    scan_line: 4
+    blind: 0.5
+
+mapping:
+    acc_cov: 0.1
+    gyr_cov: 0.1
+    b_acc_cov: 0.0001
+    b_gyr_cov: 0.0001
+    fov_degree: 360
+    det_range: 100.0
+    extrinsic_est_en: false
+    extrinsic_T: [-0.011, -0.02329, 0.04412]     # T_imu_lidar, MID-360 factory nominal
+    extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+publish:
+    path_publish_en: true
+    scan_publish_en: true
+    dense_publish_en: false
+    scan_bodyframe_pub_en: false
+
+pcd_save:
+    pcd_save_en: false
+    interval: -1
+
+feature_extract_enable: false
+point_filter_num: 1
+max_iteration: 3
+filter_size_surf: 0.25
+filter_size_map: 0.25
+cube_side_length: 1000
+ivox_grid_resolution: 0.1
+ivox_nearby_type: 18
+esti_plane_threshold: 0.1

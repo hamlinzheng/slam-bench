@@ -1,0 +1,16 @@
+<launch>
+  <!-- slam-bench faster-lio run. Mirrors upstream mapping_mid360.launch; only the
+       config path points to our override and rviz defaults off (headless benchmark). -->
+  <arg name="rviz" default="false" />
+  <arg name="config" default="/slam-bench/configs/systems/faster_lio_mid360.yaml" />
+
+  <rosparam command="load" file="$(arg config)" />
+  <param name="runtime_pos_log_enable" type="bool" value="false" />
+
+  <node pkg="faster_lio" type="run_mapping_online" name="laserMapping" output="screen" />
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find faster_lio)/config/rviz/faster_lio.rviz" />
+  </group>
+</launch>

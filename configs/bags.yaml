@@ -1,0 +1,24 @@
+# Bag registry (plan §4). Fill after recording. Paths are container paths (bags mount
+# at /bags via BAGS_DIR). Only closed-loop bags support the start-end drift metric;
+# every bag supports map quality. roi_boxes feed the plane/thickness metrics (§6).
+#
+# bags:
+#   - id: BAG-01
+#     path: /bags/indoor_corridor_loop.bag
+#     scene: indoor_corridor
+#     shape: closed_loop
+#     closed_loop: true
+#     applicable: [drift, map]
+#     roi_boxes: []            # [{min: [x,y,z], max: [x,y,z]}, ...] shared across systems
+#     notes: degenerate corridor
+#
+#   - id: BAG-02
+#     path: /bags/outdoor_campus.bag
+#     scene: outdoor_campus
+#     shape: open
+#     closed_loop: false
+#     applicable: [map]
+#     roi_boxes: []
+#     notes: ""
+
+bags: []
