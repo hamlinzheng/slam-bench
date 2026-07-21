@@ -1,0 +1,50 @@
+# slam-bench compose services. Context is the repo root so the Dockerfile can COPY
+# docker/entrypoint.sh. The repo is mounted at /slam-bench; per-system build output
+# lives in ./.ws (host, gitignored) so it persists across runs; bags mount read-only.
+#
+#   docker compose -f docker/docker-compose.yml build build     # build the image
+#   docker compose -f docker/docker-compose.yml run --rm build  # build the systems
+#   SYS=fast_lio BAG=/bags/foo.bag \
+#     docker compose -f docker/docker-compose.yml run --rm run  # run one system on one bag
+#   docker compose -f docker/docker-compose.yml run --rm dev    # interactive shell
+#
+# Set BAGS_DIR to the host directory holding your rosbags (default: ../bags).
+# For rviz from the container (dev shell), on the HOST once per session: xhost +local:root
+
+x-common: &common
+  image: slam-bench:noetic
+  runtime: nvidia             # GPU/OpenGL passthrough so rviz can render (NVIDIA host)
+  network_mode: host          # single-host roscore; no ROS networking to configure
+  working_dir: /slam-bench
+  environment:
+    - DISPLAY=${DISPLAY}
+    - QT_X11_NO_MITSHM=1
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=graphics,display,utility
+    - SYS                     # consumed by the run service; harmless/empty elsewhere
+    - BAG
+    - RATE
+    - NAME
+  volumes:
+    - ..:/slam-bench
+    - ../.ws:/ws
+    - ${BAGS_DIR:-../bags}:/bags:ro
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+services:
+  build:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: bash scripts/build_systems.sh
+
+  run:
+    <<: *common
+    command: bash -c 'scripts/run_system.sh "$SYS" "$BAG"'
+
+  dev:
+    <<: *common
+    stdin_open: true
+    tty: true
+    command: bash

@@ -1,0 +1,13 @@
+# Per-system build workspaces (created inside the container by build_systems.sh)
+.ws/
+
+# Run outputs (keep the folder, drop its contents)
+results/*/
+!results/.gitkeep
+
+# Bags are never committed
+bags/
+
+# Python
+__pycache__/
+*.pyc
