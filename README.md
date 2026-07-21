@@ -13,7 +13,7 @@ systems/     baselines as git submodules (FAST_LIO, faster-lio, livox_ros_driver
 docker/      unified Noetic image + compose (build / run / dev)
 scripts/     build_systems.sh (per-system isolated ws), run_system.sh (one system × bags)
 configs/     per-system MID-360 overrides + launch + systems.yaml (output-adapter table) + bags.yaml
-eval/        record_tum.py (trajectory ①), sample_resource.py (resource ③); metrics: later
+eval/        record_tum.py (trajectory ①), sample_resource.py (resource ③), compare.sh (evo overlay); metrics: later
 bridge/      CustomMsg→PointCloud2 uniform input (only needed once a PC2-only baseline lands)
 results/     per-run artifacts (gitignored)
 ```
@@ -65,6 +65,23 @@ cat ../results/20251118_NorcatUG/fast_lio/metrics.json
 Accuracy metrics (drift, MME, plane-RMSE) and the summary aggregator are the next stage
 (plan §5–§6).
 
+## Compare results
+
+Overlay every system's trajectory for a dataset with evo and report end-pose `|pos|`:
+
+```bash
+cd docker
+xhost +local:root                                         # HOST, once: allow the live plot window
+DS=20251118_NorcatUG docker compose run --rm compare       # 3D (xyz) overlay window + saved files
+MODE=xy   DS=20251118_NorcatUG docker compose run --rm compare       # top-down view instead
+DS=20251118_NorcatUG docker compose run --rm -e DISPLAY= compare     # headless (save only)
+```
+
+Writes `results/<DS>/compare.pdf` (evo overlay, `xyz` by default) and `results/<DS>/summary.txt`
+(per-system poses / path length / end-pose `|pos|`). Drift is intentionally **not** reported —
+these datasets are not strictly closed-loop, so a start-end gap is not a valid drift measure
+(plan §6). Outputs are chown'd back to the host user automatically.
+
 ## Interactive shell (debugging)
 
 ```bash
@@ -99,6 +116,9 @@ differs — pass it explicitly (`DISPLAY=$DISPLAY ...`). Benchmark runs stay hea
 
 ## Status
 
-Pipeline validated end-to-end on the NORCAT underground dataset (17 bags, ~17 min, 5x):
-faster-lio tracked the full run; FAST-LIO diverged mid-dataset with default params. Group-A
-baselines FAST-LIO + faster-lio are wired; more baselines and the eval/metric stage follow.
+Pipeline validated end-to-end on the NORCAT underground dataset (17 bags, ~17 min, 5x), with an
+evo trajectory-compare wrapper. Runs on this degenerate underground scene are **non-deterministic**
+(identical config, same input can complete cleanly one run and diverge the next) — so single-run
+numbers are provisional and N-run repeatability is a required next step. Group-A baselines
+FAST-LIO + faster-lio are wired; more baselines and the eval/metric stage (map quality, latency,
+aggregator) follow.

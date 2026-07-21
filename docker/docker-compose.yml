@@ -25,6 +25,8 @@ x-common: &common
     - BAG
     - RATE
     - NAME
+    - DS                      # dataset name for the compare service
+    - MODE                    # evo plot mode for the compare service (xyz default|xy|xz|yz)
   volumes:
     - ..:/slam-bench
     - ../.ws:/ws
@@ -42,6 +44,10 @@ services:
   run:
     <<: *common
     command: bash -c 'scripts/run_system.sh "$SYS" "$BAG"'
+
+  compare:
+    <<: *common
+    command: bash -c 'eval/compare.sh "$DS" "${MODE:-xyz}"'
 
   dev:
     <<: *common
