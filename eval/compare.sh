@@ -28,15 +28,26 @@ for d in "$RES"/*/; do
 done
 [ "${#TUMS[@]}" -gt 0 ] || { echo "no */trajectory.tum under $RES" >&2; exit 2; }
 
-# End-pose |pos| summary (no drift — see header).
+# Combined summary: trajectory (end-pose |pos|, drift skipped — not closed-loop) +
+# resource usage from resource.csv (cpu_mean/cpu_max %, rss peak MB).
 {
-  echo "# $DS — end-pose |pos| (drift skipped: datasets not closed-loop)"
-  printf "%-24s %8s %12s %12s\n" system poses path_len_m end_pos_m
-  for t in "${TUMS[@]}"; do
-    awk -v S="$(basename "$t" .tum)" '
-      { n++; if (NR > 1) { dx=$2-px; dy=$3-py; dz=$4-pz; L += sqrt(dx*dx+dy*dy+dz*dz) }
-        px=$2; py=$3; pz=$4 }
-      END { printf "%-24s %8d %12.1f %12.1f\n", S, n, L, sqrt(px*px+py*py+pz*pz) }' "$t"
+  echo "# $DS — end-pose |pos| (drift skipped: not closed-loop) + resource usage"
+  printf "%-24s %8s %12s %12s %10s %10s %11s\n" \
+    system poses path_len_m end_pos_m cpu_mean% cpu_max% rss_max_MB
+  for d in "$RES"/*/; do
+    s=$(basename "$d")
+    [ -f "$d/trajectory.tum" ] || continue
+    traj=$(awk '{ n++; if (NR > 1) { dx=$2-px; dy=$3-py; dz=$4-pz; L += sqrt(dx*dx+dy*dy+dz*dz) }
+                  px=$2; py=$3; pz=$4 }
+                END { printf "%d %.1f %.1f", n, L, sqrt(px*px+py*py+pz*pz) }' "$d/trajectory.tum")
+    if [ -f "$d/resource.csv" ]; then
+      res=$(awk -F, 'NR>1 { n++; c+=$2; if ($2>cm) cm=$2; if ($3>rm) rm=$3 }
+                     END { if (n) printf "%.0f %.0f %.0f", c/n, cm, rm; else printf "- - -" }' "$d/resource.csv")
+    else
+      res="- - -"
+    fi
+    # shellcheck disable=SC2086
+    printf "%-24s %8s %12s %12s %10s %10s %11s\n" "$s" $traj $res
   done
 } | tee "$RES/summary.txt"
 
