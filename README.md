@@ -41,6 +41,11 @@ BAGS_DIR=/media/hamlin/T7/NORCAT/20251118_NorcatUG \
 BAGS_DIR=/media/hamlin/T7/NORCAT/20251118_NorcatUG \
   SYS=faster_lio BAG=/bags  RATE=5.0  NAME=20251118_NorcatUG \
   docker compose run --rm run
+
+# watch the run live in rviz (host: xhost +local:root once) — not for timing/resource numbers
+BAGS_DIR=/media/hamlin/T7/NORCAT/20251118_NorcatUG \
+  SYS=fast_lio   BAG=/bags  RATE=1.0  NAME=20251118_NorcatUG  RVIZ=true \
+  docker compose run --rm run
 ```
 
 | Var | Meaning |
@@ -50,6 +55,7 @@ BAGS_DIR=/media/hamlin/T7/NORCAT/20251118_NorcatUG \
 | `RATE` | playback speed multiplier (default `5.0`; use `1.0` for a real-time run) |
 | `NAME` | output dataset label (without it a mounted directory is labeled `bags`) |
 | `BAGS_DIR` | host bag folder, mounted read-only at `/bags` in the container |
+| `RVIZ` | `true` opens the system's rviz during the run (default `false`; needs `xhost +local:root` on the host — see [Interactive shell](#interactive-shell-debugging)) |
 
 Each run writes to `results/<NAME>/<SYS>/`:
 
@@ -98,8 +104,9 @@ passthrough (`runtime: nvidia` + `NVIDIA_DRIVER_CAPABILITIES=graphics,display`).
 Both are required on an NVIDIA host — without the GPU caps rviz finds the X display but aborts
 initializing its GL context (`process has died ... exit code -6`). If it still reports
 `could not connect to display`, the host `xhost` line was skipped or the host `$DISPLAY`
-differs — pass it explicitly (`DISPLAY=$DISPLAY ...`). Benchmark runs stay headless
-(`rviz:=false`); this is only for debugging.
+differs — pass it explicitly (`DISPLAY=$DISPLAY ...`). Benchmark runs default to headless
+(`rviz:=false`); pass `RVIZ=true` to watch a run live, but keep it off for timing/resource
+numbers since rendering competes with the system under test.
 
 ## Notes
 

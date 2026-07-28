@@ -61,8 +61,8 @@ roscore & ROSCORE_PID=$!
 sleep 3
 rosparam set use_sim_time true
 
-# System under test (headless).
-roslaunch "$LAUNCH" rviz:=false > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
+# System under test. RVIZ=true opens the system's rviz (needs X11: xhost +local:root on host).
+roslaunch "$LAUNCH" rviz:="${RVIZ:-false}" > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
 sleep 5
 
 # Recorders: ① trajectory, ③ resource trace.

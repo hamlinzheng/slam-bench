@@ -27,6 +27,7 @@ x-common: &common
     - NAME
     - DS                      # dataset name for the compare service
     - MODE                    # evo plot mode for the compare service (xyz default|xy|xz|yz)
+    - RVIZ                    # true → open the system's rviz during a run (needs X11)
   volumes:
     - ..:/slam-bench
     - ../.ws:/ws
