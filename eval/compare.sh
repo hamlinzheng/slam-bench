@@ -73,14 +73,29 @@ for pick in "${PICKS[@]}"; do
 done
 echo "overlaying ${#TUMS[@]} trajectory(ies): ${PICKS[*]%%$'\t'*}"
 
+# Each system defines its world frame differently — FAST-LIO and faster-lio use the first
+# body frame, Point-LIO gravity-aligns it (and gravity leaves yaw free). Measured 169.5°
+# apart, drawing 5.4 m of real disagreement as 321.6 m. Aligning the first pose removes
+# the convention without fitting the shape; on fast_lio it moves the RMSE by 0.5%.
+#
+# evo needs a --ref for --align_origin and draws it too, so the first trajectory becomes
+# the reference and the rest stay positional. One trajectory has nothing to align to.
+ALIGN=()
+if [ "${#TUMS[@]}" -gt 1 ]; then
+  ALIGN=(--ref "${TUMS[0]}" --align_origin)
+  TUMS=("${TUMS[@]:1}")
+fi
+
 # Always save the PDF; also open a live window when a display is available. Remove any
 # prior PDF first — evo prompts interactively before overwriting, which deadlocks under
 # a non-interactive service (no stdin).
 rm -f "$RES/compare.pdf"
 if [ -n "${DISPLAY:-}" ]; then
-  evo_traj tum "${TUMS[@]}" --plot_mode "$MODE" --plot --save_plot "$RES/compare.pdf"
+  evo_traj tum "${TUMS[@]}" ${ALIGN[@]+"${ALIGN[@]}"} \
+    --plot_mode "$MODE" --plot --save_plot "$RES/compare.pdf"
 else
-  MPLBACKEND=Agg evo_traj tum "${TUMS[@]}" --plot_mode "$MODE" --save_plot "$RES/compare.pdf"
+  MPLBACKEND=Agg evo_traj tum "${TUMS[@]}" ${ALIGN[@]+"${ALIGN[@]}"} \
+    --plot_mode "$MODE" --save_plot "$RES/compare.pdf"
 fi
 
 echo "saved -> $RES/compare.pdf  |  statistics: eval/aggregate.py results/$DS"
