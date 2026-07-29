@@ -18,6 +18,18 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$REPO/scripts/lib.sh"
 COMPOSE=(docker compose -f "$REPO/docker/docker-compose.yml")
 
+# Every container runs as the invoking user (docker-compose.yml `user:`), so nothing it
+# writes into results/ or .ws/ comes back root-owned.
+export HOST_UID HOST_GID
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+
+# Create the bind-mount sources here rather than letting Docker do it. A missing source
+# directory is created by the daemon, which runs as root, and the unprivileged container
+# then cannot write into it — `mkdir /ws/<system>: Permission denied` on a clean rebuild
+# after .ws/ has been deleted.
+mkdir -p "$REPO/.ws" "$REPO/results"
+
 die() { echo "bench: $*" >&2; exit 1; }
 
 usage() {
@@ -32,7 +44,7 @@ run — environment:
   SYS        required   fast_lio | faster_lio, one or more, space separated
   N          1          runs per (system, preset)
   PRESET     default    one or more presets, space separated
-  RATE       1.0        playback speed multiplier (plan §7 measures at 1x)
+  RATE       1.0        playback speed multiplier (1x is where latency means anything)
   BAG        /bags      bag path inside the container
   RUN/FORCE  -          re-run one index; only accepted when the batch is a single run
   RVIZ       false      open the system's rviz (needs xhost +local:root)
@@ -132,7 +144,7 @@ cmd_shell() {
 }
 
 # ---------------------------------------------------------------- run ----------
-# Runs each (system, preset) N times, one fresh container per run (plan §9), so the
+# Runs each (system, preset) N times, one fresh container per run, so the
 # repeated runs that establish a noise floor cannot perturb one another.
 cmd_run() {
   split_args "$@"
@@ -246,8 +258,8 @@ cmd_run() {
         out=${out/#\/slam-bench/$REPO}
         rm -f "$log"
 
-        # A crashed run is a data point, not a reason to stop: findings §2.3's
-        # explosion mode is exactly what these batches exist to measure.
+        # A crashed run is a data point, not a reason to stop: the explosion mode
+        # is exactly what these batches exist to measure.
         if [ "$status" -eq 0 ]; then
           OK=$((OK + 1)); DIRS+=("${out:-?}")
         else

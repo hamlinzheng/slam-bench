@@ -47,13 +47,13 @@ system source change.
 
 ## Run
 
-`N` runs of each `(system, preset)`, one fresh container per run (plan §9):
+`N` runs of each `(system, preset)`, one fresh container per run:
 
 ```bash
 # one run
 BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio ./bench.sh run
 
-# the noise floor findings §6.2 asks for — 5 runs of each system
+# the noise floor: 5 runs of each system
 BAGS_DIR=/path/to/bags NAME=mydataset SYS="fast_lio faster_lio" N=5 ./bench.sh run
 
 # sweep presets, no human editing configs in between
@@ -75,12 +75,12 @@ BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio RVIZ=true ./bench.sh run
 | `SYS` | **required** — `fast_lio` \| `faster_lio`, one or more, space separated |
 | `N` | runs per (system, preset), default `1` |
 | `PRESET` | one or more, default `default` = the as-shipped launch (see [`configs/presets/`](configs/presets/README.md)) |
-| `RATE` | playback speed multiplier (default `1.0` — the rate plan §7 measures latency and real-time factor at; raise it only for smoke runs) |
+| `RATE` | playback speed multiplier (default `1.0` — the rate latency and real-time factor are defined at; raise it only for smoke runs) |
 | `BAG` | default `/bags` (a directory → all `*.bag` played in timestamp order as one stream); or `/bags/one.bag` |
 | `RUN` | explicit run index, `FORCE=true` to overwrite it — only accepted when the batch is a single run |
 | `RVIZ` | `true` opens the system's rviz (needs `xhost +local:root` — see [Interactive shell](#interactive-shell-debugging)) |
 
-A crashed run does not abort the batch — a crash *is* a data point here (findings §2.3).
+A crashed run does not abort the batch — a crash *is* a data point here.
 Pre-flight checks (bag directory, preset file, built workspace, `RUN` vs batch size) all run
 before the first container starts, so a typo fails in a second rather than after twenty
 minutes.
@@ -117,7 +117,7 @@ each other:
 cat results/mydataset/fast_lio/default/run01/metrics.json
 ```
 
-Accuracy metrics (drift, MME, plane-RMSE) are the next stage (plan §5–§6).
+Accuracy metrics (drift, MME, plane-RMSE) are the next stage.
 
 ## Aggregate results
 
@@ -129,8 +129,8 @@ Statistics over the repeated runs of a dataset:
 ./bench.sh aggregate mydataset --min-coverage 0.5   # relax the completion threshold
 ```
 
-Writes `results/<DS>/stats.txt` (human) and `stats.json` (machine, the input to plan §10's
-cross-dataset matrix), and fills each run's `metrics.json` with its derived quantities.
+Writes `results/<DS>/stats.txt` (human) and `stats.json` (machine, the input to the
+cross-dataset summary matrix), and fills each run's `metrics.json` with its derived quantities.
 
 Per `(system, preset)` it reports **median [min–max]** plus every run's raw value. Mean and
 standard deviation are deliberately absent: the distribution is bimodal, so a mean lands in
@@ -143,7 +143,7 @@ lists everything available and a new option needs declaring in one place only.
 
 If runs inside one group were built from different configurations or binaries, the group is
 split by fingerprint and flagged `⚠ MIXED` rather than silently averaged — the failure mode
-diagnosed in findings §4.3.
+that once invalidated a whole configuration sweep here.
 
 A run is excluded from the statistics, with its reason shown in the table, when any of these
 holds:
@@ -152,7 +152,7 @@ holds:
 |---|---|
 | `bag_play_exit != 0`, or null | crashed or interrupted playback |
 | trajectory timestamps outside the played bag | odometry that came from a *different* run (a shared ROS master) |
-| trajectory spans < `--min-coverage` of the bag (default `0.9`) | a run that stopped early, plan §5.3's completion criterion |
+| trajectory spans < `--min-coverage` of the bag (default `0.9`) | a run that stopped early |
 | a `VOID` file in the run directory | a human verdict; its first line is the reason |
 
 ## Compare trajectories
@@ -171,8 +171,7 @@ the view for inspecting the bimodal split itself. Median selection reads the `de
 so run `aggregate` first — groups without it fall back to all runs with a warning.
 
 Drift is intentionally **not** reported — these datasets are not strictly closed-loop, so a
-start-end gap is not a valid drift measure (plan §6). Outputs are chown'd back to the host user
-automatically.
+start-end gap is not a valid drift measure.
 
 ## Interactive shell (debugging)
 
@@ -202,10 +201,11 @@ numbers since rendering competes with the system under test.
 - **Fairness** — both systems ingest Livox `CustomMsg` natively (including
   `livox_ros_driver2/CustomMsg`, whose ROS md5 is identical, so no conversion is needed);
   MID-360 extrinsics match our rig, so only topics changed vs upstream — all algorithm
-  parameters stay at upstream defaults (plan §9).
-- **File ownership** — containers run as root, so `.ws/` and `results/` are root-owned; run
-  `docker run --rm -v "$PWD/results":/r slam-bench:noetic chown -R $(id -u):$(id -g) /r`
-  to reclaim them.
+  parameters stay at upstream defaults.
+- **File ownership** — containers run as the invoking user (`bench.sh` passes `HOST_UID`
+  / `HOST_GID`), so everything under `results/` and `.ws/` belongs to you and needs no
+  `chown`. A bare `docker compose` call without those variables falls back to root and
+  does leave root-owned files behind.
 
 ## Tests
 
@@ -225,8 +225,8 @@ Pipeline validated end-to-end on the NORCAT underground dataset (17 bags, ~17 mi
 evo trajectory-compare wrapper. Runs on this degenerate underground scene are **non-deterministic**
 (identical config, same input can complete cleanly one run and diverge the next), which is why
 results are recorded per run and aggregated over N. Group-A baselines FAST-LIO + faster-lio are
-wired; more baselines and the eval/metric stage (map quality, latency, plan §10 matrix) follow.
+wired; more baselines and the eval/metric stage (map quality, latency, the cross-dataset matrix) follow.
 
-The next measurement, per findings §6.2, is the noise floor itself: faster-lio ×3 (is it
+The next measurement is the noise floor itself: faster-lio ×3 (is it
 deterministic?) and FAST-LIO ×5 stock (explosion rate and distribution). No configuration
 comparison is interpretable before it exists.

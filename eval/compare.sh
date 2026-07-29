@@ -5,7 +5,7 @@
 # writes results/<dataset>/stats.txt. This script only draws.
 #
 # Drift is intentionally not reported — the datasets are not strictly closed-loop, so a
-# start-end gap is not a valid drift measure (plan §6 M-DRIFT applies to closed loops only).
+# start-end gap is not a valid drift measure (M-DRIFT applies to closed loops only).
 #
 # Produces results/<dataset>/compare.pdf (also shown live if a display exists).
 #
@@ -82,10 +82,5 @@ if [ -n "${DISPLAY:-}" ]; then
 else
   MPLBACKEND=Agg evo_traj tum "${TUMS[@]}" --plot_mode "$MODE" --save_plot "$RES/compare.pdf"
 fi
-
-# Hand outputs back to the host user (container writes as root); the mounted repo is
-# owned by the host user, so match that.
-OWNER=$(stat -c '%u:%g' /slam-bench 2>/dev/null || echo "")
-[ -n "$OWNER" ] && chown "$OWNER" "$RES/compare.pdf" 2>/dev/null || true
 
 echo "saved -> $RES/compare.pdf  |  statistics: eval/aggregate.py results/$DS"

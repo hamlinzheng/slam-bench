@@ -1,40 +1,32 @@
-# slam-bench compose services. Context is the repo root so the Dockerfile can COPY
-# docker/entrypoint.sh. The repo is mounted at /slam-bench; per-system build output
-# lives in ./.ws (host, gitignored) so it persists across runs; bags mount read-only.
-#
-#   docker compose -f docker/docker-compose.yml build build     # build the image
-#   docker compose -f docker/docker-compose.yml run --rm build  # build the systems
-#   SYS=fast_lio BAG=/bags/foo.bag \
-#     docker compose -f docker/docker-compose.yml run --rm run  # run one system on one bag
-#   docker compose -f docker/docker-compose.yml run --rm dev    # interactive shell
-#
-# Set BAGS_DIR to the host directory holding your rosbags (default: ../bags).
-# For rviz from the container (dev shell), on the HOST once per session: xhost +local:root
+# slam-bench compose services — driven by ./bench.sh, not meant to be run by hand.
+# Build context is the repo root so the Dockerfile can COPY docker/entrypoint.sh. The
+# repo mounts at /slam-bench, per-system build output at ./.ws (gitignored, persists
+# across runs), bags read-only from $BAGS_DIR.
 
 x-common: &common
   image: slam-bench:noetic
   runtime: nvidia             # GPU/OpenGL passthrough so rviz can render (NVIDIA host)
   network_mode: host          # single-host roscore; no ROS networking to configure
-  init: true                  # tini as PID 1: forwards signals and reaps orphans, so a
-                              # container is stoppable even if its script traps nothing
+  init: true                  # tini as PID 1 — forwards signals; without it a run cannot be stopped
+  user: "${HOST_UID:-0}:${HOST_GID:-0}"   # bench.sh sets these; unset falls back to root-owned output
   working_dir: /slam-bench
   environment:
     - DISPLAY=${DISPLAY}
     - QT_X11_NO_MITSHM=1
     - NVIDIA_VISIBLE_DEVICES=all
     - NVIDIA_DRIVER_CAPABILITIES=graphics,display,utility
-    - SYS                     # consumed by the run service; harmless/empty elsewhere
+    - SYS                     # run service; unset is harmless elsewhere
     - BAG
     - RATE
     - NAME
-    - DS                      # dataset name for the compare / aggregate services
-    - MODE                    # evo plot mode for the compare service (xyz default|xy|xz|yz)
-    - RVIZ                    # true → open the system's rviz during a run (needs X11)
-    - PRESET                  # configuration variant for the run service (default: default)
+    - DS                      # dataset name — compare / aggregate
+    - MODE                    # evo plot mode (xyz default|xy|xz|yz)
+    - RVIZ                    # true → rviz during a run (needs X11)
+    - PRESET                  # configuration variant (default: default)
     - RUN                     # explicit run index (default: next free)
     - FORCE                   # true → let RUN overwrite an existing run directory
-    - AGG_ARGS                # aggregate: extra flags, forwarded verbatim to aggregate.py
-    - ALL                     # compare: overlay every run instead of each group's median
+    - AGG_ARGS                # aggregate: extra flags for aggregate.py
+    - ALL                     # compare: overlay every run, not just medians
   volumes:
     - ..:/slam-bench
     - ../.ws:/ws
@@ -49,9 +41,8 @@ services:
       dockerfile: docker/Dockerfile
     command: bash scripts/build_systems.sh
 
-  # `$$` defers expansion to the container's shell. A single `$` would be substituted by
-  # compose itself, from the HOST environment, while every compose invocation parses all
-  # services — which is why an unrelated `run` would warn that DS is unset.
+  # `$$` defers expansion to the container's shell; a single `$` is substituted by
+  # compose from the HOST environment, for every service on every invocation.
   run:
     <<: *common
     command: bash -c 'scripts/run_system.sh "$$SYS" "$$BAG"'
@@ -62,8 +53,7 @@ services:
 
   aggregate:
     <<: *common
-    # Flags are forwarded verbatim rather than translated one by one: aggregate.py's
-    # argparse is then the single place a new option has to be declared.
+    # Flags forwarded verbatim, so aggregate.py's argparse is the only place to declare one.
     command: bash -c 'python3 eval/aggregate.py results/$$DS $$AGG_ARGS'
 
   dev:
