@@ -22,3 +22,12 @@ faster_lio:
   odom_topic: /Odometry          # nav_msgs/Odometry
   registered_cloud: /cloud_registered
   process: run_mapping_online
+
+point_lio:
+  group: A                       # pure LIO odometry; dual-mode, run in its shipped
+                                 # default use_imu_as_input=0 (IMU as measurement)
+  ws: /ws/point_lio
+  launch: configs/launch/point_lio.launch
+  odom_topic: /aft_mapped_to_init  # nav_msgs/Odometry (laserMapping.cpp:388)
+  registered_cloud: /cloud_registered
+  process: pointlio_mapping

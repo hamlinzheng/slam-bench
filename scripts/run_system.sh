@@ -36,6 +36,10 @@ case "$SYS" in
     WS=/ws/faster_lio; ODOM=/Odometry;  PROC=run_mapping_online
     BIN=$WS/devel/lib/faster_lio/run_mapping_online
     SRC=$REPO/systems/faster-lio ;;
+  point_lio)
+    WS=/ws/point_lio;  ODOM=/aft_mapped_to_init; PROC=pointlio_mapping
+    BIN=$WS/devel/lib/point_lio/pointlio_mapping
+    SRC=$REPO/systems/Point-LIO ;;
   *) echo "unknown system: $SYS" >&2; exit 2 ;;
 esac
 

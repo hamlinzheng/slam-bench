@@ -29,4 +29,7 @@ build_ws fast_lio   "$SYS/FAST_LIO" "$SYS/livox_ros_driver/livox_ros_driver"
 # faster-lio: self-contained (bundles livox_ros_driver messages in thirdparty/).
 build_ws faster_lio "$SYS/faster-lio"
 
+# Point-LIO: same shape as FAST-LIO — needs the workspace-level livox_ros_driver.
+build_ws point_lio  "$SYS/Point-LIO" "$SYS/livox_ros_driver/livox_ros_driver"
+
 echo "==================== all systems built ===================="
