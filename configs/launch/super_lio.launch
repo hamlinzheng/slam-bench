@@ -1,0 +1,21 @@
+<launch>
+  <!-- slam-bench Super-LIO run. Mirrors upstream Livox_mid360.launch structure verbatim
+       (as-shipped defaults) — the parameters are all in the YAML, loaded at launch top
+       level because the node reads them as globals (/lio/sensor/..., ROSWrapper.cpp).
+       Only the config path points to our override and rviz defaults off (headless
+       benchmark).
+
+       The `config` arg name matters: run_system.sh reads it to find the YAML that
+       goes into preset_sha alongside this file. -->
+  <arg name="rviz" default="false" />
+  <arg name="config" default="/slam-bench/configs/systems/super_lio_mid360.yaml" />
+
+  <rosparam command="load" file="$(arg config)" />
+
+  <node pkg="super_lio" type="super_lio_node" name="super_lio_node" output="screen" />
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find super_lio)/rviz/lio.rviz" />
+  </group>
+</launch>

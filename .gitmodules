@@ -11,3 +11,7 @@
 	path = systems/Point-LIO
 	url = https://github.com/hku-mars/Point-LIO.git
 	branch = point-lio-with-grid-map
+[submodule "systems/Super-LIO"]
+	path = systems/Super-LIO
+	url = https://github.com/Liansheng-Wang/Super-LIO.git
+	branch = ros1

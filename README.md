@@ -8,7 +8,7 @@ real-time performance, and robustness.
 
 ```
 bench.sh     THE entry point — the only script run by hand (host side)
-systems/     baselines as git submodules (FAST_LIO, faster-lio, livox_ros_driver)
+systems/     baselines as git submodules (FAST_LIO, faster-lio, Point-LIO, Super-LIO, livox_ros_driver)
 docker/      unified Noetic image + compose (build / run / compare / aggregate / dev)
 scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (shared rules)
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
@@ -39,7 +39,7 @@ expose is never a dead end: `./bench.sh compare <dataset> -- --no-deps`.
 ```bash
 git submodule update --init --recursive     # fetch systems/
 ./bench.sh setup                            # build the image (incl. Livox-SDK, evo)
-./bench.sh build                            # compile FAST-LIO + faster-lio into .ws/
+./bench.sh build                            # compile every baseline into .ws/
 ```
 
 `./bench.sh setup` is only needed after a Dockerfile change; `./bench.sh build` after a
@@ -72,7 +72,7 @@ BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio RVIZ=true ./bench.sh run
 |---|---|
 | `BAGS_DIR` | **required** — host bag folder, mounted read-only at `/bags` |
 | `NAME` | **required** — the `results/<dataset>` label |
-| `SYS` | **required** — `fast_lio` \| `faster_lio`, one or more, space separated |
+| `SYS` | **required** — `fast_lio` \| `faster_lio` \| `point_lio` \| `super_lio`, one or more, space separated |
 | `N` | runs per (system, preset), default `1` |
 | `PRESET` | one or more, default `default` = the as-shipped launch (see [`configs/presets/`](configs/presets/README.md)) |
 | `RATE` | playback speed multiplier (default `1.0` — the rate latency and real-time factor are defined at; raise it only for smoke runs) |
@@ -196,12 +196,16 @@ numbers since rendering competes with the system under test.
 ## Notes
 
 - **Isolated workspaces** — each system builds into its own `../.ws/<system>` (plan §11):
-  FAST-LIO needs the workspace-level `livox_ros_driver`, faster-lio bundles its own copy,
-  so one shared workspace would collide on the package name.
-- **Fairness** — both systems ingest Livox `CustomMsg` natively (including
+  FAST-LIO and Point-LIO need the workspace-level `livox_ros_driver`, while faster-lio and
+  Super-LIO each bundle their own copy of the CustomMsg definitions, so one shared workspace
+  would collide on the package name. (Super-LIO's upstream repo is itself a catkin workspace,
+  so both of its packages — `src/basic` and `src/super_lio` — get linked into `.ws/super_lio`.)
+- **Fairness** — every system ingests Livox `CustomMsg` natively (including
   `livox_ros_driver2/CustomMsg`, whose ROS md5 is identical, so no conversion is needed);
   MID-360 extrinsics match our rig, so only topics changed vs upstream — all algorithm
-  parameters stay at upstream defaults.
+  parameters stay at upstream defaults. The one further plumbing edit is disabling each
+  system's own PCD dump (`pcd_save_en` / `save_map`): map artifact ② is accumulated
+  externally, and dumping during a run perturbs the resource trace ③.
 - **File ownership** — containers run as the invoking user (`bench.sh` passes `HOST_UID`
   / `HOST_GID`), so everything under `results/` and `.ws/` belongs to you and needs no
   `chown`. A bare `docker compose` call without those variables falls back to root and
@@ -224,8 +228,9 @@ not coming up, container exit codes, GPU contention) are not reachable from a un
 Pipeline validated end-to-end on the NORCAT underground dataset (17 bags, ~17 min, 5x), with an
 evo trajectory-compare wrapper. Runs on this degenerate underground scene are **non-deterministic**
 (identical config, same input can complete cleanly one run and diverge the next), which is why
-results are recorded per run and aggregated over N. Group-A baselines FAST-LIO + faster-lio are
-wired; more baselines and the eval/metric stage (map quality, latency, the cross-dataset matrix) follow.
+results are recorded per run and aggregated over N. Group-A baselines FAST-LIO, faster-lio,
+Point-LIO and Super-LIO are wired; more baselines and the eval/metric stage (map quality, latency,
+the cross-dataset matrix) follow.
 
 The next measurement is the noise floor itself: faster-lio ×3 (is it
 deterministic?) and FAST-LIO ×5 stock (explosion rate and distribution). No configuration

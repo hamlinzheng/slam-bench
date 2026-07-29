@@ -1,0 +1,78 @@
+# Override of Super-LIO/src/super_lio/config/livox_360.yaml for the slam-bench rig.
+# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lidar_topic/imu_topic
+# point to our bag's topics and save_map is disabled (map artifact ② is accumulated externally).
+# All algorithm parameters are left at upstream defaults.
+#
+# save_map matters more here than in the other systems: g_save_map_dir resolves to
+# ROOT + "map", and ROOT is baked in at compile time as the package SOURCE directory
+# (super_lio/CMakeLists.txt: add_definitions(-DROOT=...)). So a run with it on writes PCDs
+# into systems/Super-LIO/, which both perturbs artifact ③ with periodic disk I/O and flips
+# system_dirty to true in every metrics.json.
+#
+# Extrinsics are upstream's own values and already the MID-360 factory nominal — unchanged.
+lio:
+  # Map settings
+  map:
+    save_map: false     # CHANGED: was true — see header
+    if_filter: true
+    save_map_dir: "map"
+    map_name: "map.pcd"
+    ds_size: 0.25
+    save_interval: 500    # -1 stores all frames directly (may cause excessive memory usage).
+                          # Values > 0 save one frame every N frames, then merge at the end.
+
+  # ROS Topic input
+  ros:
+    lidar_topic: "/sensing/front/livox/lidar"   # CHANGED: was /livox/lidar
+    imu_topic: "/sensing/front/livox/imu"       # CHANGED: was /livox/imu
+
+  # Sensor Configuration
+  sensor:
+    lidar_type: 1        # 1 = Livox (mid360) -> subscribes livox_ros_driver/CustomMsg
+    blind: 2.0
+    maxrange: 60.0
+    filter_rate: 3.0
+    enable_downsample: true
+    voxel_fliter_size: 0.5
+    gravity_norm: 9.7946
+    imu_type: 1
+    imu_na: 0.1
+    imu_ng: 0.1
+    imu_nba: 0.0001
+    imu_nbg: 0.0001
+
+  # Extrinsic Parameters
+  extrinsic:
+    lidar_imu: [-0.011, -0.02329, 0.04412,      # lidar in imu, MID-360 factory nominal
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0]
+    odom_robo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Transform from odom to robot frame.
+                                               # The odom frame is directly attached to the IMU frame.
+                                               # NOTE: The inverse of this transform is applied in the code.
+
+  # Vox hash Map
+  hash_map:
+    hash_capacity: 2000000
+    vox_resolution: 0.5
+
+  # Kalman Filter Parameters
+  kf:
+    kf_type: 0
+    kf_max_iterations: 4
+    kf_align_gravity: true
+    kf_quit_eps: 0.001
+
+  # output
+  output:
+    robot:  false
+    plan_env_world: false
+    plan_env_body:  false
+    ml_map:  false
+    planner: false
+    map:    true        # gates /lio/cloud_world — the registered cloud artifact ② reads
+    dense:  true
+    pub_step: 1
+
+  eva:
+    timer: true

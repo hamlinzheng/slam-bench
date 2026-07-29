@@ -40,6 +40,10 @@ case "$SYS" in
     WS=/ws/point_lio;  ODOM=/aft_mapped_to_init; PROC=pointlio_mapping
     BIN=$WS/devel/lib/point_lio/pointlio_mapping
     SRC=$REPO/systems/Point-LIO ;;
+  super_lio)
+    WS=/ws/super_lio;  ODOM=/lio/odom; PROC=super_lio_node
+    BIN=$WS/devel/lib/super_lio/super_lio_node
+    SRC=$REPO/systems/Super-LIO ;;
   *) echo "unknown system: $SYS" >&2; exit 2 ;;
 esac
 

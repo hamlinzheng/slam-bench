@@ -32,4 +32,10 @@ build_ws faster_lio "$SYS/faster-lio"
 # Point-LIO: same shape as FAST-LIO — needs the workspace-level livox_ros_driver.
 build_ws point_lio  "$SYS/Point-LIO" "$SYS/livox_ros_driver/livox_ros_driver"
 
+# Super-LIO: the upstream repo IS a catkin workspace (src/basic + src/super_lio), so both
+# packages get linked in. Self-contained on CustomMsg — it bundles the generated
+# livox_ros_driver headers in 3rdparty/, so linking the workspace-level livox_ros_driver
+# here would put two definitions of the same message in one workspace.
+build_ws super_lio  "$SYS/Super-LIO/src/basic" "$SYS/Super-LIO/src/super_lio"
+
 echo "==================== all systems built ===================="

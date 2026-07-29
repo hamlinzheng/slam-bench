@@ -31,3 +31,11 @@ point_lio:
   odom_topic: /aft_mapped_to_init  # nav_msgs/Odometry (laserMapping.cpp:388)
   registered_cloud: /cloud_registered
   process: pointlio_mapping
+
+super_lio:
+  group: A                       # pure LIO odometry (ESKF + OctVoxMap hash map, no backend)
+  ws: /ws/super_lio
+  launch: configs/launch/super_lio.launch
+  odom_topic: /lio/odom          # nav_msgs/Odometry, frame: world (ROSWrapper.cpp:210)
+  registered_cloud: /lio/cloud_world
+  process: super_lio_node
