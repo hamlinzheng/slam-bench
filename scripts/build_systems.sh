@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build each baseline in its OWN isolated catkin workspace under /ws.
 #
-# Isolation is deliberate (plan §11): FAST-LIO needs the workspace-level
+# Isolation is deliberate: FAST-LIO needs the workspace-level
 # livox_ros_driver, while faster-lio bundles its own copy via add_subdirectory —
 # two packages of the same name in one workspace would collide. One workspace per
 # system sidesteps that entirely and keeps a broken build in one system from

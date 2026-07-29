@@ -15,7 +15,7 @@ NO_RESOURCE = {"cpu_mean": None, "cpu_max": None, "rss_max_MB": None}
 
 # A healthy run's trajectory covers essentially the whole bag (measured: 99%). The
 # threshold is dimensionless and 1.0 is the ideal by definition — unlike the explosion
-# split of §6.3, whose scale is a property of the dataset — so a default is defensible.
+# split, whose scale is a property of the dataset — so a default is defensible.
 DEFAULT_MIN_COVERAGE = 0.9
 # Odometry for a scan can be stamped slightly outside the bag's own start/end.
 BAG_RANGE_TOLERANCE_S = 5.0
@@ -33,7 +33,7 @@ def load_run(run_dir, min_coverage=DEFAULT_MIN_COVERAGE):
     """Read one run directory into a record: its metrics.json plus status + derived.
 
     Status precedence: a human VOID verdict outranks the automatic checks, because a
-    run can exit cleanly and still be worthless (findings §4.1 diagB exited 0 after
+    run can exit cleanly and still be worthless (a starved run once exited 0 after
     the map was starved).
     """
     run_dir = Path(run_dir)
@@ -62,7 +62,7 @@ def _completion_failure(rec, min_coverage):
     """Why this run is not a completed run, or None if it is.
 
     Beyond the exit code, completion means the trajectory actually came from the bag
-    this run played and covered it (plan §5.3). Both checks exist because a run can
+    this run played and covered it. Both checks exist because a run can
     report bag_play_exit 0 and still be worthless: with network_mode host a surviving
     container keeps the ROS master, and the recorder then captures a *different* run's
     /Odometry — observed, and invisible to every other check.
@@ -189,7 +189,7 @@ def collect(dataset_dir, min_coverage=DEFAULT_MIN_COVERAGE):
         if not metrics.exists():
             # SIGKILL cannot be trapped, so a force-killed run (`docker rm -f`) leaves
             # artefacts and no record. Globbing for metrics.json would skip it silently
-            # and n would shrink unnoticed — the very thing §8.2 exists to prevent.
+            # and n would shrink unnoticed — the very thing the run record exists to prevent.
             print(
                 "aggregate: {} has no metrics.json — run was killed".format(run_dir),
                 file=sys.stderr,
@@ -240,7 +240,7 @@ def group_runs(records):
     A group whose runs were built from different configurations or different binaries
     is not one sample. It is split by fingerprint and every resulting subgroup is
     flagged `consistent: False`, so its statistics can still be read but never as a
-    single population — the mistake diagnosed in findings §4.3.
+    single population — the mistake that once invalidated a whole sweep.
     """
     by_pair = {}
     for r in records:
@@ -340,10 +340,10 @@ def summarize(values):
     """Count, median and range of one quantity across a group's runs.
 
     `median_low` rather than `median`: on an even sample the arithmetic median
-    averages the two central observations, which on the bimodal distribution of
-    findings §2.3 lands in the empty gap between the modes and reports an outcome
+    averages the two central observations, which on a bimodal distribution
+    lands in the empty gap between the modes and reports an outcome
     no run produced. The low median is always a real observation. Mean and standard
-    deviation are omitted for the same reason (§6.2 of the design).
+    deviation are omitted for the same reason.
     """
     return {
         "n": len(values),

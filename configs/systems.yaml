@@ -1,4 +1,4 @@
-# Output Adapter Table (plan §5.2) — the ONLY system-specific glue in the pipeline.
+# Output Adapter Table — the ONLY system-specific glue in the pipeline.
 # Everything downstream (drift, map, resource metrics) reads the normalized artifacts
 # and does not know which system produced them. scripts/run_system.sh currently mirrors
 # the odom_topic / process fields here in a case statement; keep the two in sync (a

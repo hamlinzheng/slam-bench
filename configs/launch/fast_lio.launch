@@ -1,6 +1,6 @@
 <launch>
   <!-- slam-bench FAST-LIO run. Mirrors upstream mapping_mid360.launch parameters
-       verbatim (as-shipped defaults, fairness §9); only the config path points to our
+       verbatim (as-shipped defaults); only the config path points to our
        override and rviz defaults off (headless benchmark). -->
   <arg name="rviz" default="false" />
   <arg name="config" default="/slam-bench/configs/systems/fast_lio_mid360.yaml" />

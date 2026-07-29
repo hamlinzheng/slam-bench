@@ -1,6 +1,6 @@
-# Bag registry (plan §4). Fill after recording. Paths are container paths (bags mount
+# Bag registry. Fill after recording. Paths are container paths (bags mount
 # at /bags via BAGS_DIR). Only closed-loop bags support the start-end drift metric;
-# every bag supports map quality. roi_boxes feed the plane/thickness metrics (§6).
+# every bag supports map quality. roi_boxes feed the plane/thickness metrics.
 #
 # bags:
 #   - id: BAG-01

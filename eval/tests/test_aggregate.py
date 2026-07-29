@@ -78,9 +78,9 @@ def test_summary_reports_count_median_min_and_max():
 
 
 def test_median_of_an_even_sample_is_an_observed_value_not_an_average():
-    # findings §2.3: the distribution is bimodal (recover ~22-30 m, explode ~99-603 m).
+    # The distribution is bimodal (recover ~22-30 m, explode ~99-603 m).
     # Averaging the two middle values would report 64.8 m — the empty gap between the
-    # modes, an outcome no run ever produced. That is the same objection §6.2 raises
+    # modes, an outcome no run ever produced. That is the same objection raised
     # against the mean, so the low median is used: it is always a real observation.
     bimodal = [22.3, 30.2, 99.4, 484.7]
     assert aggregate.summarize(bimodal)["median"] == 30.2
@@ -147,7 +147,7 @@ def test_void_file_marks_the_run_void_and_carries_its_reason(tmp_path):
 
 
 def test_void_wins_over_an_automatic_verdict(tmp_path):
-    # A run can exit 0 and still be worthless (findings §4.1 diagB). The human
+    # A run can exit 0 and still be worthless (a starved run). The human
     # judgement must not be overridden by the clean exit code.
     run = make_run(tmp_path)
     (run / "VOID").write_text("starved\n")
@@ -289,7 +289,7 @@ def test_a_uniform_group_is_marked_consistent():
 def test_a_differing_binary_sha_splits_the_group():
     # findings §4.2: the source patch was reverted and the tree is clean, but .ws/
     # still held the patched binary. Only the binary hash separates those runs, and
-    # merging them into one median is exactly the error of findings §4.3.
+    # merging them into one median is exactly the error that invalidated a past sweep.
     subgroups = [
         g
         for g in aggregate.group_runs([rec(), rec(), rec(binary_sha="patched")])

@@ -1,5 +1,5 @@
 # Override of faster-lio/config/mid360.yaml for the slam-bench rig.
-# ONLY plumbing changed vs upstream (fairness §9): lid_topic/imu_topic point to our
+# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lid_topic/imu_topic point to our
 # bag's topics and pcd_save is disabled (map artifact ② is accumulated externally).
 # All algorithm parameters are left at upstream defaults.
 common:

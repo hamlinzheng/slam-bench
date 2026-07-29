@@ -6,14 +6,14 @@
 # RELATIVE to the repository root and each caller prepends its own root.
 
 BENCH_DEFAULT_PRESET=default
-# 1.0 is the rate comparison_plan §7 requires for latency, throughput stability and
+# 1.0 is the rate at which latency, throughput stability and
 # real-time factor to mean anything — the default therefore matches the measurement
 # condition, and a faster rate is an explicit opt-in for a quick smoke run.
 BENCH_DEFAULT_RATE=1.0
 BENCH_DEFAULT_BAG=/bags
 
 # preset_launch <system> <preset> -> launch file path, relative to the repo root.
-# `default` is the as-shipped upstream configuration (plan §9); every other preset is a
+# `default` is the as-shipped upstream configuration; every other preset is a
 # standalone file, so a batch can sweep presets with nobody editing configs in between.
 preset_launch() {
   if [ "$2" = "$BENCH_DEFAULT_PRESET" ]; then

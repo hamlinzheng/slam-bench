@@ -1,7 +1,7 @@
 # bridge — uniform input node
 
 `CustomMsg → PointCloud2(ring, time)` bridge so baselines that require
-`sensor_msgs/PointCloud2` consume an **identical** input stream (plan §2).
+`sensor_msgs/PointCloud2` consume an **identical** input stream.
 
 **Not needed yet.** The first two baselines (FAST-LIO, faster-lio) ingest Livox
 `CustomMsg` natively, so they read the raw bag topic directly. This node is

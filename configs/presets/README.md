@@ -9,13 +9,13 @@ results/<dataset>/<system>/<preset>/run<NN>/
 
 | `PRESET` | Launch file used |
 |---|---|
-| `default` (the default) | `configs/launch/<system>.launch` — as-shipped upstream parameters, plan §9 |
+| `default` (the default) | `configs/launch/<system>.launch` — as-shipped upstream parameters |
 | anything else | `configs/presets/<system>/<preset>.launch` |
 
 ## Why presets are separate files
 
 A variant must never be produced by editing the shared launch file between runs. That
-is how findings §4.3 happened: configuration arms and their baselines ended up built
+is how a past sweep was invalidated: configuration arms and their baselines ended up built
 from different binaries, and nothing in the results recorded it. With one file per
 preset, a batch sweeps `default`, `cube400`, `cube100` back to back with no human
 touching anything in between, and `preset_sha` in each `metrics.json` fingerprints the

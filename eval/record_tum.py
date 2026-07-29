@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record a nav_msgs/Odometry topic to a TUM trajectory file (artifact ①, plan §5.1).
+"""Record a nav_msgs/Odometry topic to a TUM trajectory file (artifact ①).
 
 TUM line: `timestamp tx ty tz qx qy qz qw`, one per odom message, using the message
 header stamp. This is the single normalized trajectory format all accuracy metrics

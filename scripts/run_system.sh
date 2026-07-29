@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run one baseline once, over one bag, and capture the normalized artifacts (plan §5):
+# Run one baseline once, over one bag, and capture the normalized artifacts:
 #   ① trajectory.tum   — odom topic recorded to TUM
 #   ③ resource.csv     — external /proc CPU% + RSS sampling of the system process
 #      run.log         — system stdout/stderr
@@ -26,7 +26,7 @@ source /opt/ros/noetic/setup.bash
 
 # Per-system glue — mirrors configs/systems.yaml (the plan's Output Adapter Table).
 # BIN and SRC exist for provenance: the binary hash catches a patched build whose
-# source has since been reverted (findings §4.2), which git state cannot see.
+# source has since been reverted, which git state cannot see.
 case "$SYS" in
   fast_lio)
     WS=/ws/fast_lio;   ODOM=/Odometry;  PROC=fastlio_mapping
@@ -72,14 +72,14 @@ fi
 # NAME overrides the dataset label (the bag mount basename is often just "bags").
 DATASET=${NAME:-$BAGNAME}
 
-# Playback rate (real-time multiplier). Defaults to 1x (plan §7); the rig tolerates >=3x
+# Playback rate (real-time multiplier). Defaults to 1x, where latency means anything; the rig tolerates >=3x
 # if you are trading real-time fidelity for wall-clock on a smoke run.
 RATE=${RATE:-$BENCH_DEFAULT_RATE}
 
 # Refuse to join a master this run did not start. Every service uses network_mode: host,
 # so a surviving container keeps port 11311 bound; the roscore below would then fail to
 # bind while every node silently registers with the stale master, merging two runs'
-# /Odometry into both trajectories. Observed in practice — see the design §8.4.
+# /Odometry into both trajectories. Observed in practice.
 if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/11311' 2>/dev/null; then
   echo "a ROS master is already listening on 127.0.0.1:11311 — another run is still alive." >&2
   echo "this run would join it and both trajectories would be contaminated. Stop it first:" >&2
@@ -88,7 +88,7 @@ if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/11311' 2>/dev/null; then
 fi
 
 # Bag time bounds, recorded so aggregate.py can check that the trajectory actually came
-# from THIS playback and covered it (plan §5.3's completion criterion).
+# from THIS playback and covered it.
 #
 # Probed in the BACKGROUND: reading a bag index costs ~0.3 s, so on a 17-bag dataset this
 # is ~5 s — and the value is not needed until metrics.json is written, at the very end.
@@ -132,7 +132,7 @@ git_dirty() {
 }
 
 write_metrics() {
-  # Collect the background bag-bounds probe (§ above); by now it has long finished.
+  # Collect the background bag-bounds probe started above; by now it has long finished.
   wait "${BOUNDS_PID:-}" 2>/dev/null || true
   read -r BAG_START BAG_END < "$BOUNDS_FILE" 2>/dev/null || true
   rm -f "$BOUNDS_FILE"
@@ -210,7 +210,7 @@ cleanup() {
 # metrics.json is written on EVERY exit path, not just the happy one: a run that dies
 # mid-way must still leave a record, or aggregate.py cannot see that it happened and
 # n silently shrinks — losing failure samples exactly when the failure rate is the
-# measurement (design §8.2).
+# measurement.
 finish() { cleanup; write_metrics; }
 trap finish EXIT
 

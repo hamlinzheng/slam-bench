@@ -1,7 +1,7 @@
 # Override of Point-LIO config/avia.yaml (closest shipped Livox profile) for the
 # slam-bench rig, from the `point-lio-with-grid-map` branch — master's config schema
 # differs and ROS ignores unknown keys silently, so the branch must match the binary.
-# ONLY plumbing changed vs upstream (fairness §9): lid_topic/imu_topic, scan_line and
+# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lid_topic/imu_topic, scan_line and
 # extrinsic_T, each marked CHANGED below; all algorithm parameters keep upstream values.
 # acc_norm, imu_time_inte and lidar_time_inte need no change — measured from the bag:
 # 0.9966 g, 203.9 Hz, 10.0 Hz.

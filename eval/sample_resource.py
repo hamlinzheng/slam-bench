@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External per-process resource sampler (artifact ③, plan §5 / §7).
+"""External per-process resource sampler (artifact ③).
 
 Finds the system-under-test by process name, then samples CPU% (share of one core;
 may exceed 100 on multi-threaded systems) and RSS from /proc at a fixed interval.
