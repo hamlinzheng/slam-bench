@@ -15,6 +15,8 @@ x-common: &common
   image: slam-bench:noetic
   runtime: nvidia             # GPU/OpenGL passthrough so rviz can render (NVIDIA host)
   network_mode: host          # single-host roscore; no ROS networking to configure
+  init: true                  # tini as PID 1: forwards signals and reaps orphans, so a
+                              # container is stoppable even if its script traps nothing
   working_dir: /slam-bench
   environment:
     - DISPLAY=${DISPLAY}
@@ -25,9 +27,14 @@ x-common: &common
     - BAG
     - RATE
     - NAME
-    - DS                      # dataset name for the compare service
+    - DS                      # dataset name for the compare / aggregate services
     - MODE                    # evo plot mode for the compare service (xyz default|xy|xz|yz)
     - RVIZ                    # true → open the system's rviz during a run (needs X11)
+    - PRESET                  # configuration variant for the run service (default: default)
+    - RUN                     # explicit run index (default: next free)
+    - FORCE                   # true → let RUN overwrite an existing run directory
+    - AGG_ARGS                # aggregate: extra flags, forwarded verbatim to aggregate.py
+    - ALL                     # compare: overlay every run instead of each group's median
   volumes:
     - ..:/slam-bench
     - ../.ws:/ws
@@ -42,13 +49,22 @@ services:
       dockerfile: docker/Dockerfile
     command: bash scripts/build_systems.sh
 
+  # `$$` defers expansion to the container's shell. A single `$` would be substituted by
+  # compose itself, from the HOST environment, while every compose invocation parses all
+  # services — which is why an unrelated `run` would warn that DS is unset.
   run:
     <<: *common
-    command: bash -c 'scripts/run_system.sh "$SYS" "$BAG"'
+    command: bash -c 'scripts/run_system.sh "$$SYS" "$$BAG"'
 
   compare:
     <<: *common
-    command: bash -c 'eval/compare.sh "$DS" "${MODE:-xyz}"'
+    command: bash -c 'eval/compare.sh "$$DS" "$${MODE:-xyz}"'
+
+  aggregate:
+    <<: *common
+    # Flags are forwarded verbatim rather than translated one by one: aggregate.py's
+    # argparse is then the single place a new option has to be declared.
+    command: bash -c 'python3 eval/aggregate.py results/$$DS $$AGG_ARGS'
 
   dev:
     <<: *common

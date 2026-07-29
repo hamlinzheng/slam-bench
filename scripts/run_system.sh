@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
-# Run one baseline over one bag and capture the normalized artifacts (plan §5):
+# Run one baseline once, over one bag, and capture the normalized artifacts (plan §5):
 #   ① trajectory.tum   — odom topic recorded to TUM
 #   ③ resource.csv     — external /proc CPU% + RSS sampling of the system process
 #      run.log         — system stdout/stderr
-#      metrics.json    — completion + bag-play exit code (accuracy metrics computed later)
+#      metrics.json    — run record: completion + full provenance (accuracy metrics later)
+#
+# Output goes to results/<dataset>/<system>/<preset>/run<NN>/ — repeated runs never
+# overwrite each other. Aggregate them with eval/aggregate.py.
+#
+# INTERNAL: this runs INSIDE the container, invoked by the compose `run` service. The
+# entry point meant for humans is ./run.sh at the repository root, which drives this
+# one container per run and adds the repeat/sweep loop.
 #
 # Usage: run_system.sh <fast_lio|faster_lio> <bag_path> [out_dir]
+#   PRESET=<name>  configuration variant (default: `default`)
+#   RUN=<n>        explicit run index (default: next free)
+#   FORCE=true     allow RUN to overwrite an existing run directory
+#   NAME=<label>   dataset label   RATE=<x> playback speed   RVIZ=true open rviz
 set -uo pipefail
 SYS=${1:?usage: run_system.sh <fast_lio|faster_lio> <bag_path> [out_dir]}
 BAG=${2:?bag path required}
 REPO=/slam-bench
+source "$REPO/scripts/lib.sh"
 source /opt/ros/noetic/setup.bash
 
 # Per-system glue — mirrors configs/systems.yaml (the plan's Output Adapter Table).
+# BIN and SRC exist for provenance: the binary hash catches a patched build whose
+# source has since been reverted (findings §4.2), which git state cannot see.
 case "$SYS" in
   fast_lio)
-    WS=/ws/fast_lio;   LAUNCH=$REPO/configs/launch/fast_lio.launch
-    ODOM=/Odometry;    PROC=fastlio_mapping ;;
+    WS=/ws/fast_lio;   ODOM=/Odometry;  PROC=fastlio_mapping
+    BIN=$WS/devel/lib/fast_lio/fastlio_mapping
+    SRC=$REPO/systems/FAST_LIO ;;
   faster_lio)
-    WS=/ws/faster_lio; LAUNCH=$REPO/configs/launch/faster_lio.launch
-    ODOM=/Odometry;    PROC=run_mapping_online ;;
+    WS=/ws/faster_lio; ODOM=/Odometry;  PROC=run_mapping_online
+    BIN=$WS/devel/lib/faster_lio/run_mapping_online
+    SRC=$REPO/systems/faster-lio ;;
   *) echo "unknown system: $SYS" >&2; exit 2 ;;
 esac
 
@@ -28,6 +44,17 @@ if [ ! -f "$WS/devel/setup.bash" ]; then
   exit 3
 fi
 source "$WS/devel/setup.bash"
+
+# Preset resolution lives in scripts/lib.sh so the host entry point applies the same
+# rule during pre-flight — the rule exists once, not once per side.
+PRESET=${PRESET:-$BENCH_DEFAULT_PRESET}
+LAUNCH=$REPO/$(preset_launch "$SYS" "$PRESET")
+[ -f "$LAUNCH" ] || { echo "no preset launch file: $LAUNCH" >&2; exit 5; }
+
+# The parameters live in two files: the launch itself and the YAML it loads. Both go
+# into the fingerprint, and metrics.json records which files were hashed.
+CFG=$(sed -n 's/.*name="config"[^>]*default="\([^"]*\)".*/\1/p' "$LAUNCH" | head -1)
+[ -n "$CFG" ] && [ -f "$CFG" ] || CFG=""
 
 # BAG may be a single .bag, or a directory (all *.bag played in timestamp order as
 # one merged stream — our recordings are split into consecutive 1-minute chunks).
@@ -39,46 +66,206 @@ else
   BAGS=("$BAG"); BAGNAME=$(basename "$BAG"); BAGNAME=${BAGNAME%.bag}
 fi
 # NAME overrides the dataset label (the bag mount basename is often just "bags").
-BAGNAME=${NAME:-$BAGNAME}
+DATASET=${NAME:-$BAGNAME}
 
-# Playback rate (real-time multiplier). Default 5x; the rig test tolerates >=3x.
-RATE=${RATE:-5.0}
+# Playback rate (real-time multiplier). Defaults to 1x (plan §7); the rig tolerates >=3x
+# if you are trading real-time fidelity for wall-clock on a smoke run.
+RATE=${RATE:-$BENCH_DEFAULT_RATE}
 
-OUT=${3:-$REPO/results/$BAGNAME/$SYS}
+# Refuse to join a master this run did not start. Every service uses network_mode: host,
+# so a surviving container keeps port 11311 bound; the roscore below would then fail to
+# bind while every node silently registers with the stale master, merging two runs'
+# /Odometry into both trajectories. Observed in practice — see the design §8.4.
+if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/11311' 2>/dev/null; then
+  echo "a ROS master is already listening on 127.0.0.1:11311 — another run is still alive." >&2
+  echo "this run would join it and both trajectories would be contaminated. Stop it first:" >&2
+  echo "  docker rm -f \$(docker ps -q --filter ancestor=slam-bench:noetic)" >&2
+  exit 7
+fi
+
+# Bag time bounds, recorded so aggregate.py can check that the trajectory actually came
+# from THIS playback and covered it (plan §5.3's completion criterion).
+#
+# Probed in the BACKGROUND: reading a bag index costs ~0.3 s, so on a 17-bag dataset this
+# is ~5 s — and the value is not needed until metrics.json is written, at the very end.
+# On the critical path it delayed even the first line of output.
+BAG_START=""; BAG_END=""
+BOUNDS_FILE=$(mktemp)
+{
+  for b in "${BAGS[@]}"; do
+    # One invocation per bag, both keys parsed from it: two `-k` calls cost twice as much
+    # for the same information. `^` anchors keep the nested per-topic keys out.
+    rosbag info -y "$b" 2>/dev/null | sed -n 's/^\(start\|end\): *//p'
+  done | python3 -c 'import sys
+v = [float(x) for x in sys.stdin.read().split() if x.strip()]
+print("%.6f %.6f" % (min(v), max(v)) if v else " ")'
+} > "$BOUNDS_FILE" 2>/dev/null &
+BOUNDS_PID=$!
+
+if [ -n "${3:-}" ]; then
+  OUT=$3
+else
+  PRESET_DIR=$REPO/results/$DATASET/$SYS/$PRESET
+  mkdir -p "$PRESET_DIR"
+  OUT=$(python3 "$REPO/eval/next_run_dir.py" "$PRESET_DIR" \
+          ${RUN:+--run "$RUN"} ${FORCE:+--force}) || exit 6
+fi
 mkdir -p "$OUT"
-echo "system=$SYS bags=${#BAGS[@]} rate=${RATE}x out=$OUT"
+RUN_INDEX=$(basename "$OUT"); RUN_INDEX=${RUN_INDEX#run}; RUN_INDEX=${RUN_INDEX#0}
+echo "system=$SYS preset=$PRESET bags=${#BAGS[@]} rate=${RATE}x out=$OUT"
+
+STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+START_S=$SECONDS
+PLAY_EXIT=""   # stays empty (null) if we die before playback finishes
+
+sha_of() { [ -n "$1" ] && [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
+# git: the container runs as root against a host-owned mount, so entrypoint.sh must
+# have marked it safe.directory — otherwise these silently yield "" (recorded null).
+git_commit() { git -C "$1" rev-parse --short HEAD 2>/dev/null || true; }
+git_dirty() {
+  git -C "$1" rev-parse HEAD >/dev/null 2>&1 || return 0
+  if [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]; then echo true; else echo false; fi
+}
+
+write_metrics() {
+  # Collect the background bag-bounds probe (§ above); by now it has long finished.
+  wait "${BOUNDS_PID:-}" 2>/dev/null || true
+  read -r BAG_START BAG_END < "$BOUNDS_FILE" 2>/dev/null || true
+  rm -f "$BOUNDS_FILE"
+
+  TRAJ_LINES=$(wc -l < "$OUT/trajectory.tum" 2>/dev/null || echo 0)
+  if [ "$PLAY_EXIT" = "0" ] && [ "$TRAJ_LINES" -ge 2 ]; then STATUS=ok; else STATUS=failed; fi
+
+  M_SYSTEM=$SYS M_PRESET=$PRESET M_RUN=$RUN_INDEX M_DATASET=$DATASET M_RATE=$RATE \
+  M_PLATFORM=$(uname -m) M_STATUS=$STATUS M_STARTED_AT=$STARTED_AT \
+  M_WALL_S=$((SECONDS - START_S)) M_PLAY_EXIT=$PLAY_EXIT M_POSES=$TRAJ_LINES \
+  M_BAG_START=$BAG_START M_BAG_END=$BAG_END \
+  M_PRESET_SHA=$(cat "$LAUNCH" ${CFG:+"$CFG"} | sha256sum | cut -d' ' -f1) \
+  M_PRESET_FILES="${LAUNCH#$REPO/}${CFG:+:${CFG#$REPO/}}" \
+  M_BINARY_SHA=$(sha_of "$BIN") \
+  M_SYSTEM_COMMIT=$(git_commit "$SRC") M_SYSTEM_DIRTY=$(git_dirty "$SRC") \
+  M_BENCH_COMMIT=$(git_commit "$REPO") M_BENCH_DIRTY=$(git_dirty "$REPO") \
+  python3 - "$OUT/metrics.json" <<'PY'
+import json, os, sys
+
+def text(key):
+    """Empty means "could not be measured" — recorded as null, never as "" or 0."""
+    return os.environ.get(key) or None
+
+def num(key, cast=float):
+    v = os.environ.get(key)
+    try:
+        return cast(v)
+    except (TypeError, ValueError):
+        return None
+
+def flag(key):
+    v = os.environ.get(key)
+    return {"true": True, "false": False}.get(v)
+
+files = os.environ.get("M_PRESET_FILES", "")
+record = {
+    "system": text("M_SYSTEM"),
+    "preset": text("M_PRESET"),
+    "run": num("M_RUN", int),
+    "dataset": text("M_DATASET"),
+    "rate": num("M_RATE"),
+    "platform": text("M_PLATFORM"),
+    "status": text("M_STATUS"),
+    "started_at": text("M_STARTED_AT"),
+    "wall_s": num("M_WALL_S", int),
+    "bag_play_exit": num("M_PLAY_EXIT", int),
+    "traj_poses": num("M_POSES", int),
+    "bag_start": num("M_BAG_START"),
+    "bag_end": num("M_BAG_END"),
+    "preset_sha": text("M_PRESET_SHA"),
+    "preset_files": [f for f in files.split(":") if f],
+    "binary_sha": text("M_BINARY_SHA"),
+    "system_commit": text("M_SYSTEM_COMMIT"),
+    "system_dirty": flag("M_SYSTEM_DIRTY"),
+    "bench_commit": text("M_BENCH_COMMIT"),
+    "bench_dirty": flag("M_BENCH_DIRTY"),
+    "derived": {},
+}
+with open(sys.argv[1], "w") as fh:
+    json.dump(record, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+  echo "done -> $OUT  (status=$STATUS, poses=$TRAJ_LINES, play_exit=${PLAY_EXIT:-none})"
+}
 
 cleanup() {
+  kill -INT "${PLAY_PID:-}" 2>/dev/null || true
   kill -INT "${REC_PID:-}" "${SAMP_PID:-}" 2>/dev/null || true
   sleep 1
   kill -INT "${LAUNCH_PID:-}" 2>/dev/null || true
   sleep 2
   kill "${ROSCORE_PID:-}" 2>/dev/null || true
 }
-trap cleanup EXIT
+
+# metrics.json is written on EVERY exit path, not just the happy one: a run that dies
+# mid-way must still leave a record, or aggregate.py cannot see that it happened and
+# n silently shrinks — losing failure samples exactly when the failure rate is the
+# measurement (design §8.2).
+finish() { cleanup; write_metrics; }
+trap finish EXIT
+
+# These handlers are not politeness — they are what makes the container stoppable at all.
+# This script is PID 1 inside the container, and Linux delivers a signal to PID 1 only if
+# that process installed an explicit handler; anything left at its default disposition is
+# discarded by the kernel. Without these traps `docker stop`, `docker kill -s INT` and
+# Ctrl-C all leave the run alive, holding the ROS master for the next one.
+on_signal() {
+  echo "run_system: signal received — shutting down" >&2
+  exit 130   # the EXIT trap does the cleanup and still writes metrics.json
+}
+trap on_signal INT TERM
+
+# Wait for a condition rather than a fixed duration. Measured, the fixed sleeps this
+# replaces were both wrong in both directions: roscore is usable in 0.8 s and the node
+# advertises in 0.7 s (so 3 s + 5 s wasted ~6 s per run), while on a loaded machine a
+# fixed wait can be too SHORT — and starting playback before the node is up silently
+# loses the opening scans, which no check would attribute to a race.
+wait_for() {   # wait_for <timeout_s> <what> <command...>
+  local deadline=$((SECONDS + $1)) what=$2
+  shift 2
+  until "$@" >/dev/null 2>&1; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "timed out after $((deadline - SECONDS + $1))s waiting for $what" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+}
 
 roscore & ROSCORE_PID=$!
-sleep 3
+wait_for 60 "roscore" rostopic list || exit 8
 rosparam set use_sim_time true
 
 # System under test. RVIZ=true opens the system's rviz (needs X11: xhost +local:root on host).
 roslaunch "$LAUNCH" rviz:="${RVIZ:-false}" > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
-sleep 5
+wait_for 120 "$SYS to advertise $ODOM (see $OUT/run.log)" \
+  bash -c "rostopic list | grep -qx '$ODOM'" || exit 9
 
 # Recorders: ① trajectory, ③ resource trace.
 python3 "$REPO/eval/record_tum.py"      --topic "$ODOM" --out "$OUT/trajectory.tum" & REC_PID=$!
 python3 "$REPO/eval/sample_resource.py" --proc "$PROC"  --out "$OUT/resource.csv"   & SAMP_PID=$!
 
+# Playback must not start until the recorder is actually subscribed, or the opening poses
+# are dropped. (This is not what makes a healthy run's coverage 0.99 rather than 1.00 —
+# measured, that is FAST-LIO's own ~0.37 s IMU initialisation before its first odometry,
+# and closing this race did not change it. The race is real but was not the cause.)
+wait_for 60 "the trajectory recorder to subscribe to $ODOM" \
+  bash -c "rostopic info '$ODOM' | sed -n '/Subscribers:/,\$p' | grep -q '\*'" || exit 10
+
 # Playback with /clock for completion + real-time-factor assessment.
+#
+# Backgrounded and waited on rather than run in the foreground: bash defers a trapped
+# signal until the running foreground command finishes, so with `rosbag play` in the
+# foreground the handlers above could not fire until playback ended — the whole point of
+# being interruptible. `wait` instead returns immediately when a trapped signal arrives.
 echo "playing ${#BAGS[@]} bag(s) at rate ${RATE}x ..."
-rosbag play --clock -r "$RATE" "${BAGS[@]}"
+rosbag play --clock -r "$RATE" "${BAGS[@]}" & PLAY_PID=$!
+wait "$PLAY_PID"
 PLAY_EXIT=$?
 sleep 2
-
-cleanup
-trap - EXIT
-
-TRAJ_LINES=$(wc -l < "$OUT/trajectory.tum" 2>/dev/null || echo 0)
-printf '{"system":"%s","bag":"%s","rate":%s,"bag_play_exit":%s,"traj_poses":%s}\n' \
-  "$SYS" "$BAGNAME" "$RATE" "$PLAY_EXIT" "$TRAJ_LINES" > "$OUT/metrics.json"
-echo "done -> $OUT  (poses=$TRAJ_LINES, play_exit=$PLAY_EXIT)"
