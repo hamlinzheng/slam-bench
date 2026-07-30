@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Build each baseline in its OWN isolated catkin workspace under /ws.
 #
-# Isolation is deliberate: FAST-LIO needs the workspace-level
-# livox_ros_driver, while faster-lio bundles its own copy via add_subdirectory —
-# two packages of the same name in one workspace would collide. One workspace per
-# system sidesteps that entirely and keeps a broken build in one system from
-# poisoning the others.
+# Isolation is deliberate: FAST-LIO needs a workspace-level livox_ros_driver, while
+# faster-lio bundles its own copy via add_subdirectory — two packages of the same name in
+# one workspace would collide. One workspace per system sidesteps that entirely and keeps a
+# broken build in one system from poisoning the others.
 set -euo pipefail
 source /opt/ros/noetic/setup.bash
 SYS=/slam-bench/systems
@@ -23,14 +22,14 @@ build_ws () {
   ( cd "$ws" && catkin_make -DCMAKE_BUILD_TYPE=Release )
 }
 
-# FAST-LIO: package + the message-generating livox driver (needs Livox-SDK, in the image).
-build_ws fast_lio   "$SYS/FAST_LIO" "$SYS/livox_ros_driver/livox_ros_driver"
+# FAST-LIO: package + Livox CustomMsg types (livox_msgs is messages only, no driver).
+build_ws fast_lio   "$SYS/FAST_LIO" "$SYS/livox_msgs/livox_ros_driver"
 
 # faster-lio: self-contained (bundles livox_ros_driver messages in thirdparty/).
 build_ws faster_lio "$SYS/faster-lio"
 
-# Point-LIO: same shape as FAST-LIO — needs the workspace-level livox_ros_driver.
-build_ws point_lio  "$SYS/Point-LIO" "$SYS/livox_ros_driver/livox_ros_driver"
+# Point-LIO: same shape as FAST-LIO.
+build_ws point_lio  "$SYS/Point-LIO" "$SYS/livox_msgs/livox_ros_driver"
 
 # Super-LIO: the upstream repo IS a catkin workspace (src/basic + src/super_lio), so both
 # packages get linked in. Self-contained on CustomMsg — it bundles the generated

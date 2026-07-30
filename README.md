@@ -8,7 +8,7 @@ real-time performance, and robustness.
 
 ```
 bench.sh     THE entry point — the only script run by hand (host side)
-systems/     baselines as git submodules (FAST_LIO, faster-lio, Point-LIO, Super-LIO, livox_ros_driver)
+systems/     baselines as submodules (FAST_LIO, faster-lio, Point-LIO, Super-LIO) + livox_msgs/
 docker/      unified Noetic image + compose (build / run / compare / aggregate / dev)
 scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (shared rules)
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
@@ -38,7 +38,7 @@ expose is never a dead end: `./bench.sh compare <dataset> -- --no-deps`.
 
 ```bash
 git submodule update --init --recursive     # fetch systems/
-./bench.sh setup                            # build the image (incl. Livox-SDK, evo)
+./bench.sh setup                            # build the image (ROS Noetic + PCL, evo)
 ./bench.sh build                            # compile every baseline into .ws/
 ```
 
@@ -196,15 +196,18 @@ numbers since rendering competes with the system under test.
 ## Notes
 
 - **Isolated workspaces** — each system builds into its own `../.ws/<system>` (plan §11):
-  FAST-LIO and Point-LIO need the workspace-level `livox_ros_driver`, while faster-lio and
+  FAST-LIO and Point-LIO need a workspace-level `livox_ros_driver`, while faster-lio and
   Super-LIO each bundle their own copy of the CustomMsg definitions, so one shared workspace
   would collide on the package name. (Super-LIO's upstream repo is itself a catkin workspace,
   so both of its packages — `src/basic` and `src/super_lio` — get linked into `.ws/super_lio`.)
-- **Fairness** — every system ingests Livox `CustomMsg` natively (including
-  `livox_ros_driver2/CustomMsg`, whose ROS md5 is identical, so no conversion is needed);
-  MID-360 extrinsics match our rig, so only topics changed vs upstream — all algorithm
-  parameters stay at upstream defaults. The one further plumbing edit is disabling each
-  system's own PCD dump (`pcd_save_en` / `save_map`): map artifact ② is accumulated
+- **Messages, not the driver** — [`systems/livox_msgs/`](systems/livox_msgs/README.md) supplies
+  the Livox `CustomMsg` types under both `livox_ros_driver` and `livox_ros_driver2`. We replay
+  bags and never run a Livox node, so the image needs no Livox-SDK.
+- **Fairness** — every system ingests Livox `CustomMsg` natively (our bags record
+  `livox_ros_driver2/CustomMsg`, whose ROS md5 is identical to gen1's, so no conversion is
+  needed); MID-360 extrinsics match our rig, so only topics changed vs upstream — all
+  algorithm parameters stay at upstream defaults. The one further plumbing edit is disabling
+  each system's own PCD dump (`pcd_save_en` / `save_map`): map artifact ② is accumulated
   externally, and dumping during a run perturbs the resource trace ③.
 - **File ownership** — containers run as the invoking user (`bench.sh` passes `HOST_UID`
   / `HOST_GID`), so everything under `results/` and `.ws/` belongs to you and needs no

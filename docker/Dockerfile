@@ -13,11 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-noetic-eigen-conversions ros-noetic-pcl-ros \
   && rm -rf /var/lib/apt/lists/*
 
-# Livox-SDK — required to build livox_ros_driver (FAST-LIO's CustomMsg dependency).
-RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK.git /opt/Livox-SDK \
-  && mkdir -p /opt/Livox-SDK/build && cd /opt/Livox-SDK/build \
-  && cmake .. && make -j"$(nproc)" && make install && ldconfig
-
 # evo: TUM-trajectory metrics / plots (artifact ①).
 RUN pip3 install --no-cache-dir evo
 
