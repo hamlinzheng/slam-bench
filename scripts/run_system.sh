@@ -59,10 +59,12 @@ PRESET=${PRESET:-$BENCH_DEFAULT_PRESET}
 LAUNCH=$REPO/$(preset_launch "$SYS" "$PRESET")
 [ -f "$LAUNCH" ] || { echo "no preset launch file: $LAUNCH" >&2; exit 5; }
 
-# The parameters live in two files: the launch itself and the YAML it loads. Both go
-# into the fingerprint, and metrics.json records which files were hashed.
-CFG=$(sed -n 's/.*name="config"[^>]*default="\([^"]*\)".*/\1/p' "$LAUNCH" | head -1)
-[ -n "$CFG" ] && [ -f "$CFG" ] || CFG=""
+# The parameters live in the launch plus every YAML it loads through an <arg name="config...">.
+# A system may have more than one (BIEVR-LIO takes a sensor config and a params file); all are
+# hashed, in launch order. A value that is not a readable file is skipped — it may be a name.
+mapfile -t CFGS < <(sed -n 's/.*name="config[^"]*"[^>]*default="\([^"]*\)".*/\1/p' "$LAUNCH")
+KEPT=(); for c in "${CFGS[@]}"; do [ -f "$c" ] && KEPT+=("$c"); done
+CFGS=("${KEPT[@]}")
 
 # BAG may be a single .bag, or a directory (all *.bag played in timestamp order as
 # one merged stream — our recordings are split into consecutive 1-minute chunks).
@@ -144,12 +146,14 @@ write_metrics() {
   TRAJ_LINES=$(wc -l < "$OUT/trajectory.tum" 2>/dev/null || echo 0)
   if [ "$PLAY_EXIT" = "0" ] && [ "$TRAJ_LINES" -ge 2 ]; then STATUS=ok; else STATUS=failed; fi
 
+  REL=("${LAUNCH#$REPO/}"); for c in "${CFGS[@]}"; do REL+=("${c#$REPO/}"); done
+
   M_SYSTEM=$SYS M_PRESET=$PRESET M_RUN=$RUN_INDEX M_DATASET=$DATASET M_RATE=$RATE \
   M_PLATFORM=$(uname -m) M_STATUS=$STATUS M_STARTED_AT=$STARTED_AT \
   M_WALL_S=$((SECONDS - START_S)) M_PLAY_EXIT=$PLAY_EXIT M_POSES=$TRAJ_LINES \
   M_BAG_START=$BAG_START M_BAG_END=$BAG_END \
-  M_PRESET_SHA=$(cat "$LAUNCH" ${CFG:+"$CFG"} | sha256sum | cut -d' ' -f1) \
-  M_PRESET_FILES="${LAUNCH#$REPO/}${CFG:+:${CFG#$REPO/}}" \
+  M_PRESET_SHA=$(cat "$LAUNCH" "${CFGS[@]}" | sha256sum | cut -d' ' -f1) \
+  M_PRESET_FILES=$(IFS=:; echo "${REL[*]}") \
   M_BINARY_SHA=$(sha_of "$BIN") \
   M_SYSTEM_COMMIT=$(git_commit "$SRC") M_SYSTEM_DIRTY=$(git_dirty "$SRC") \
   M_BENCH_COMMIT=$(git_commit "$REPO") M_BENCH_DIRTY=$(git_dirty "$REPO") \
