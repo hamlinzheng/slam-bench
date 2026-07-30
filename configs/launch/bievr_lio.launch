@@ -1,0 +1,19 @@
+<launch>
+  <!-- slam-bench BIEVR-LIO run. Mirrors upstream process_topics.launch; the node reads its
+       two YAML paths from argv, and an absolute path is used verbatim, so ours are passed
+       directly instead of through upstream's $(eval) name lookup.
+
+       Both `config` arg names matter: run_system.sh collects every name="config..." arg into
+       preset_sha, so the sensor config and the params file are both fingerprinted. -->
+  <arg name="rviz" default="false" />
+  <arg name="config"        default="/slam-bench/configs/systems/bievr_lio_mid360.yaml" />
+  <arg name="config_params" default="/slam-bench/configs/systems/bievr_lio_params.yaml" />
+
+  <node pkg="bievr_lio_ros" type="process_topics" name="bievr_lio_topics_node" output="screen"
+        args="--sensor_config_file $(arg config) --params_file $(arg config_params)" />
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find bievr_lio_ros)/rviz/config.rviz" />
+  </group>
+</launch>

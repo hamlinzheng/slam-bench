@@ -39,3 +39,11 @@ super_lio:
   odom_topic: /lio/odom          # nav_msgs/Odometry, frame: world (ROSWrapper.cpp:210)
   registered_cloud: /lio/cloud_world
   process: super_lio_node
+
+bievr_lio:
+  group: A                       # pure LIO odometry (bump-image voxel map, no backend)
+  ws: /ws/bievr_lio
+  launch: configs/launch/bievr_lio.launch
+  odom_topic: /bievr_lio/odom    # nav_msgs/Odometry; ns "bievr_lio" + topic "odom"
+  registered_cloud: /bievr_lio/points/registered
+  process: process_topics

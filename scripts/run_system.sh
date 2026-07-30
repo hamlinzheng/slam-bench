@@ -44,6 +44,10 @@ case "$SYS" in
     WS=/ws/super_lio;  ODOM=/lio/odom; PROC=super_lio_node
     BIN=$WS/devel/lib/super_lio/super_lio_node
     SRC=$REPO/systems/Super-LIO ;;
+  bievr_lio)
+    WS=/ws/bievr_lio;  ODOM=/bievr_lio/odom; PROC=process_topics
+    BIN=$WS/devel/lib/bievr_lio_ros/process_topics
+    SRC=$REPO/systems/BIEVR-LIO ;;
   *) echo "unknown system: $SYS" >&2; exit 2 ;;
 esac
 
@@ -239,11 +243,15 @@ trap on_signal INT TERM
 # fixed wait can be too SHORT — and starting playback before the node is up silently
 # loses the opening scans, which no check would attribute to a race.
 wait_for() {   # wait_for <timeout_s> <what> <command...>
-  local deadline=$((SECONDS + $1)) what=$2
+  # $1 must be captured before the shift: afterwards it is the command's first word, and
+  # using it in $(( )) evaluated that word as a variable — which under set -u killed the
+  # timeout path with "unbound variable" instead of reporting the timeout.
+  local timeout=$1 what=$2
+  local deadline=$((SECONDS + timeout))
   shift 2
   until "$@" >/dev/null 2>&1; do
     if [ "$SECONDS" -ge "$deadline" ]; then
-      echo "timed out after $((deadline - SECONDS + $1))s waiting for $what" >&2
+      echo "timed out after ${timeout}s waiting for $what" >&2
       return 1
     fi
     sleep 0.2
@@ -256,8 +264,12 @@ rosparam set use_sim_time true
 
 # System under test. RVIZ=true opens the system's rviz (needs X11: xhost +local:root on host).
 roslaunch "$LAUNCH" rviz:="${RVIZ:-false}" > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
-wait_for 120 "$SYS to advertise $ODOM (see $OUT/run.log)" \
-  bash -c "rostopic list | grep -qx '$ODOM'" || exit 9
+# Ready means "subscribed to the input", not "advertising its output". Those coincide only for
+# systems that advertise eagerly; BIEVR-LIO advertises on first publish, so waiting for its
+# odometry deadlocks against playback that has not started. Subscription is also the signal
+# this gate actually wants — it is what makes the opening scans reach the system.
+wait_for 120 "$SYS to subscribe to $BENCH_LIDAR_TOPIC (see $OUT/run.log)" \
+  bash -c "rostopic list -s | grep -qx '$BENCH_LIDAR_TOPIC'" || exit 9
 
 # Recorders: ① trajectory, ③ resource trace.
 python3 "$REPO/eval/record_tum.py"      --topic "$ODOM" --out "$OUT/trajectory.tum" & REC_PID=$!

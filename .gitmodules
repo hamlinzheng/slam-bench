@@ -12,3 +12,6 @@
 	path = systems/Super-LIO
 	url = https://github.com/Liansheng-Wang/Super-LIO.git
 	branch = ros1
+[submodule "systems/BIEVR-LIO"]
+	path = systems/BIEVR-LIO
+	url = https://github.com/ethz-asl/BIEVR-LIO.git

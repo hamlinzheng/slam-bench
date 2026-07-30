@@ -11,6 +11,10 @@ BENCH_DEFAULT_PRESET=default
 # condition, and a faster rate is an explicit opt-in for a quick smoke run.
 BENCH_DEFAULT_RATE=1.0
 BENCH_DEFAULT_BAG=/bags
+# The LiDAR topic our bags carry. A property of the rig, not of any system — every baseline
+# is pointed at it by its own config. run_system.sh waits for the system under test to
+# subscribe to it before starting playback.
+BENCH_LIDAR_TOPIC=/sensing/front/livox/lidar
 
 # preset_launch <system> <preset> -> launch file path, relative to the repo root.
 # `default` is the as-shipped upstream configuration; every other preset is a

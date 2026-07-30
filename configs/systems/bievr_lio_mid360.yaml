@@ -1,0 +1,21 @@
+# BIEVR-LIO sensor config for the slam-bench rig. Upstream ships no MID-360 config, so this
+# is written from scratch in their sensor-config format (topics + T_IMU_LIDAR + range gate);
+# every algorithm parameter stays upstream in bievr_lio_params.yaml.
+#
+# min/max range are the only values with no upstream MID-360 reference. Both are the house
+# default across upstream's own configs (min 0.5 in 4 of 5; max 100 in 3 of 5) and max also
+# matches FAST-LIO's det_range in our fast_lio_mid360.yaml. 100 m is well beyond the MID-360's
+# ~40-70 m physical reach, so the gate is permissive and is not silently filtering returns.
+topics:
+  pointcloud: "/sensing/front/livox/lidar"
+  imu: "/sensing/front/livox/imu"
+
+calibration: # T_IMU_LIDAR (LiDAR -> IMU)
+  translation: [-0.011, -0.02329, 0.04412]   # MID-360 factory nominal
+  rotation: [1, 0, 0,
+             0, 1, 0,
+             0, 0, 1]
+
+lidar:
+  min_range_m: 0.5 # Exclude points closer than this range [m]
+  max_range_m: 100 # Exclude points farther than this range [m]
