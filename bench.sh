@@ -41,7 +41,7 @@ usage() {
 run — environment:
   BAGS_DIR   required   host bag folder, mounted read-only at /bags
   NAME       required   the results/<dataset> label
-  SYS        required   fast_lio | faster_lio | point_lio | super_lio, one or more, space separated
+  SYS        required   fast_lio | faster_lio | point_lio | super_lio | pv_lio | bievr_lio
   N          1          runs per (system, preset)
   PRESET     default    one or more presets, space separated
   RATE       1.0        playback speed multiplier (1x is where latency means anything)

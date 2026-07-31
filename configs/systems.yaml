@@ -40,6 +40,14 @@ super_lio:
   registered_cloud: /lio/cloud_world
   process: super_lio_node
 
+pv_lio:
+  group: A                       # pure LIO odometry (probabilistic voxel map, no backend)
+  ws: /ws/pv_lio
+  launch: configs/launch/pv_lio.launch
+  odom_topic: /Odometry          # nav_msgs/Odometry, frame: camera_init
+  registered_cloud: /cloud_registered
+  process: pv_lio_node
+
 bievr_lio:
   group: A                       # pure LIO odometry (bump-image voxel map, no backend)
   ws: /ws/bievr_lio

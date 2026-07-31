@@ -8,7 +8,8 @@ real-time performance, and robustness.
 
 ```
 bench.sh     THE entry point — the only script run by hand (host side)
-systems/     baselines as submodules (FAST_LIO, faster-lio, Point-LIO, Super-LIO) + livox_msgs/
+systems/     baselines as submodules (FAST_LIO, faster-lio, Point-LIO, Super-LIO, PV-LIO,
+             BIEVR-LIO) + livox_msgs/ (vendored Livox CustomMsg types, not a baseline)
 docker/      unified Noetic image + compose (build / run / compare / aggregate / dev)
 scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (shared rules)
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
@@ -72,7 +73,7 @@ BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio RVIZ=true ./bench.sh run
 |---|---|
 | `BAGS_DIR` | **required** — host bag folder, mounted read-only at `/bags` |
 | `NAME` | **required** — the `results/<dataset>` label |
-| `SYS` | **required** — `fast_lio` \| `faster_lio` \| `point_lio` \| `super_lio`, one or more, space separated |
+| `SYS` | **required** — `fast_lio` \| `faster_lio` \| `point_lio` \| `super_lio` \| `pv_lio` \| `bievr_lio`, one or more, space separated |
 | `N` | runs per (system, preset), default `1` |
 | `PRESET` | one or more, default `default` = the as-shipped launch (see [`configs/presets/`](configs/presets/README.md)) |
 | `RATE` | playback speed multiplier (default `1.0` — the rate latency and real-time factor are defined at; raise it only for smoke runs) |
@@ -232,8 +233,10 @@ Pipeline validated end-to-end on the NORCAT underground dataset (17 bags, ~17 mi
 evo trajectory-compare wrapper. Runs on this degenerate underground scene are **non-deterministic**
 (identical config, same input can complete cleanly one run and diverge the next), which is why
 results are recorded per run and aggregated over N. Group-A baselines FAST-LIO, faster-lio,
-Point-LIO and Super-LIO are wired; more baselines and the eval/metric stage (map quality, latency,
-the cross-dataset matrix) follow.
+Point-LIO, Super-LIO and PV-LIO are wired and produce usable trajectories. BIEVR-LIO builds and
+runs but its estimate diverges on this dataset, so it stays `screen` in the plan rather than
+`admit` — see the plan's §2 notes. The eval/metric stage (map quality, latency, the cross-dataset
+matrix) follows.
 
 The next measurement is the noise floor itself: faster-lio ×3 (is it
 deterministic?) and FAST-LIO ×5 stock (explosion rate and distribution). No configuration

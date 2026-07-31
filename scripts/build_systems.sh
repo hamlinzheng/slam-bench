@@ -49,6 +49,9 @@ build_ws faster_lio "$SYS/faster-lio"
 # Point-LIO: same shape as FAST-LIO.
 build_ws point_lio  "$SYS/Point-LIO" "$SYS/livox_msgs/livox_ros_driver"
 
+# PV-LIO: same shape as FAST-LIO.
+build_ws pv_lio     "$SYS/PV-LIO" "$SYS/livox_msgs/livox_ros_driver"
+
 # Super-LIO: the upstream repo IS a catkin workspace (src/basic + src/super_lio), so both
 # packages get linked in. Self-contained on CustomMsg — it bundles the generated
 # livox_ros_driver headers in 3rdparty/, so linking the workspace-level livox_ros_driver

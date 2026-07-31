@@ -1,0 +1,18 @@
+<launch>
+  <!-- slam-bench PV-LIO run. Mirrors upstream mapping_avia.launch; only the config path
+       points to our override and rviz defaults off (headless benchmark).
+
+       The `config` arg name matters: run_system.sh hashes every name="config..." arg's
+       YAML into preset_sha alongside this file. -->
+  <arg name="rviz" default="false" />
+  <arg name="config" default="/slam-bench/configs/systems/pv_lio_mid360.yaml" />
+
+  <rosparam command="load" file="$(arg config)" />
+
+  <node pkg="pv_lio" type="pv_lio_node" name="pv_lio_node" output="screen" />
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find pv_lio)/config/rviz_cfg/voxel_mapping.rviz" />
+  </group>
+</launch>

@@ -44,6 +44,10 @@ case "$SYS" in
     WS=/ws/super_lio;  ODOM=/lio/odom; PROC=super_lio_node
     BIN=$WS/devel/lib/super_lio/super_lio_node
     SRC=$REPO/systems/Super-LIO ;;
+  pv_lio)
+    WS=/ws/pv_lio;     ODOM=/Odometry; PROC=pv_lio_node
+    BIN=$WS/devel/lib/pv_lio/pv_lio_node
+    SRC=$REPO/systems/PV-LIO ;;
   bievr_lio)
     WS=/ws/bievr_lio;  ODOM=/bievr_lio/odom; PROC=process_topics
     BIN=$WS/devel/lib/bievr_lio_ros/process_topics
