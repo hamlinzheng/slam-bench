@@ -135,6 +135,7 @@ echo "system=$SYS preset=$PRESET bags=${#BAGS[@]} rate=${RATE}x out=$OUT"
 STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 START_S=$SECONDS
 PLAY_EXIT=""   # stays empty (null) if we die before playback finishes
+SYS_ALIVE=""   # ditto: whether the system under test outlived the playback
 
 sha_of() { [ -n "$1" ] && [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
 # git: the container runs as root against a host-owned mount, so entrypoint.sh must
@@ -152,12 +153,17 @@ write_metrics() {
   rm -f "$BOUNDS_FILE"
 
   TRAJ_LINES=$(wc -l < "$OUT/trajectory.tum" 2>/dev/null || echo 0)
-  if [ "$PLAY_EXIT" = "0" ] && [ "$TRAJ_LINES" -ge 2 ]; then STATUS=ok; else STATUS=failed; fi
+  if [ "$PLAY_EXIT" = "0" ] && [ "$SYS_ALIVE" = "true" ] && [ "$TRAJ_LINES" -ge 2 ]; then
+    STATUS=ok
+  else
+    STATUS=failed
+  fi
 
   REL=("${LAUNCH#$REPO/}"); for c in "${CFGS[@]}"; do REL+=("${c#$REPO/}"); done
 
   M_SYSTEM=$SYS M_PRESET=$PRESET M_RUN=$RUN_INDEX M_DATASET=$DATASET M_RATE=$RATE \
   M_PLATFORM=$(uname -m) M_STATUS=$STATUS M_STARTED_AT=$STARTED_AT \
+  M_OMP_WAIT_POLICY=$OMP_WAIT_POLICY M_SYS_ALIVE=$SYS_ALIVE \
   M_WALL_S=$((SECONDS - START_S)) M_PLAY_EXIT=$PLAY_EXIT M_POSES=$TRAJ_LINES \
   M_BAG_START=$BAG_START M_BAG_END=$BAG_END \
   M_PRESET_SHA=$(cat "$LAUNCH" "${CFGS[@]}" | sha256sum | cut -d' ' -f1) \
@@ -191,10 +197,13 @@ record = {
     "dataset": text("M_DATASET"),
     "rate": num("M_RATE"),
     "platform": text("M_PLATFORM"),
+    # CPU% only compares across runs sharing this. Absent = predates it, i.e. libgomp's default.
+    "omp_wait_policy": text("M_OMP_WAIT_POLICY"),
     "status": text("M_STATUS"),
     "started_at": text("M_STARTED_AT"),
     "wall_s": num("M_WALL_S", int),
     "bag_play_exit": num("M_PLAY_EXIT", int),
+    "system_alive": flag("M_SYS_ALIVE"),   # false = died before playback ended
     "traj_poses": num("M_POSES", int),
     "bag_start": num("M_BAG_START"),
     "bag_end": num("M_BAG_END"),
@@ -266,6 +275,11 @@ roscore & ROSCORE_PID=$!
 wait_for 60 "roscore" rostopic list || exit 8
 rosparam set use_sim_time true
 
+# Park idle OpenMP workers rather than let them spin between parallel regions: /proc counts
+# spinning as CPU, so artifact ③ would measure each system's thread cap as much as its cost
+# (PV-LIO 1069% -> 327%, throughput unchanged). `active` restores the as-shipped default.
+export OMP_WAIT_POLICY=${OMP_WAIT_POLICY:-passive}
+
 # System under test. RVIZ=true opens the system's rviz (needs X11: xhost +local:root on host).
 roslaunch "$LAUNCH" rviz:="${RVIZ:-false}" > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
 # Ready means "subscribed to the input", not "advertising its output". Those coincide only for
@@ -297,3 +311,12 @@ rosbag play --clock -r "$RATE" "${BAGS[@]}" & PLAY_PID=$!
 wait "$PLAY_PID"
 PLAY_EXIT=$?
 sleep 2
+
+# A system that dies mid-bag does not stop playback, so exit code and pose count alone score a
+# crash as a clean run — PV-LIO was OOM-killed at 75% of a bag and still reported status=ok.
+# roslaunch exits with its last node, so its state is the signal; read /proc rather than use
+# `kill -0`, which reports a not-yet-reaped zombie as alive. (RVIZ=true adds a second node and
+# would defeat this — one more reason that mode is not for measurement runs.)
+SYS_ALIVE=$(awk '{ sub(/^.*\) /, ""); print ($1 == "Z") ? "false" : "true" }' \
+              "/proc/${LAUNCH_PID}/stat" 2>/dev/null || echo false)
+[ -n "$SYS_ALIVE" ] || SYS_ALIVE=false

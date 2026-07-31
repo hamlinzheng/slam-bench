@@ -111,8 +111,9 @@ each other:
 - `resource.csv` — external CPU%/RSS trace (artifact ③)
 - `run.log` — system stdout/stderr
 - `metrics.json` — completion + provenance (`preset_sha`, `binary_sha`, submodule commit
-  and dirty state, the played bag's `bag_start`/`bag_end`), plus the derived quantities
-  `aggregate.py` writes back
+  and dirty state, `omp_wait_policy`, the played bag's `bag_start`/`bag_end`), plus the derived
+  quantities `aggregate.py` writes back. `status=ok` needs playback to exit 0, ≥2 poses **and**
+  `system_alive` — a system killed mid-bag leaves all the other signals looking healthy
 
 ```bash
 cat results/mydataset/fast_lio/default/run01/metrics.json
@@ -210,6 +211,12 @@ numbers since rendering competes with the system under test.
   algorithm parameters stay at upstream defaults. The one further plumbing edit is disabling
   each system's own PCD dump (`pcd_save_en` / `save_map`): map artifact ② is accumulated
   externally, and dumping during a run perturbs the resource trace ③.
+- **CPU % measures work, not spinning** — runs set `OMP_WAIT_POLICY=passive` (plan §7). `/proc`
+  cannot tell a thread doing maths from one busy-waiting, and libgomp spins by default, so the
+  metric otherwise reads each system's hardcoded thread count as much as its cost: PV-LIO drops
+  1069 % → 327 % with the pose rate unchanged. Only systems with their own `#pragma omp` move at
+  all (FAST-LIO, PV-LIO); the rest sit within 1.03×. `OMP_WAIT_POLICY=active` restores the
+  as-shipped default, and each run records which it used.
 - **File ownership** — containers run as the invoking user (`bench.sh` passes `HOST_UID`
   / `HOST_GID`), so everything under `results/` and `.ws/` belongs to you and needs no
   `chown`. A bare `docker compose` call without those variables falls back to root and
