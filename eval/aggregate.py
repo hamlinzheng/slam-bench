@@ -11,7 +11,31 @@ import statistics
 import sys
 from pathlib import Path
 
-NO_RESOURCE = {"cpu_mean": None, "cpu_max": None, "rss_max_MB": None}
+NO_RESOURCE = {
+    "cpu_mean": None,
+    "cpu_max": None,
+    "rss_max_MB": None,
+    "cpu_s_total": None,
+}
+
+# Every quantity frame_stats can produce, all absent. Same reason as NO_RESOURCE: a run
+# that was never measured must read as null, not as zero latency.
+NO_FRAMES = {
+    "lat_p50_ms": None,
+    "lat_p99_ms": None,
+    "out_ratio": None,
+    "lag_growth_ms": None,
+    "sensor_hz": None,
+    "rate_actual": None,
+    "in_jitter": None,
+    "saturated_frac": None,
+    "skipped_in": None,
+    "unmatched_out": None,
+}
+
+# lag_growth_ms compares the first and last tenth of the run. Below this many frames the
+# two ends would overlap, so there is no growth to speak of.
+MIN_FRAMES_FOR_LAG = 20
 
 # A healthy run's trajectory covers essentially the whole bag (measured: 99%). The
 # threshold is dimensionless and 1.0 is the ideal by definition — unlike the explosion
@@ -98,8 +122,61 @@ def _derive(run_dir, bag_start=None, bag_end=None):
         derived.update(resource_stats(csv))
     except OSError:
         derived.update(NO_RESOURCE)
+    try:
+        derived.update(frame_stats(run_dir / "frame_events.csv"))
+    except OSError:
+        derived.update(NO_FRAMES)
+    derived["cpu_ms_per_frame"] = _cpu_per_frame(
+        derived["cpu_s_total"], derived["n_poses"]
+    )
+    derived["parallelism"] = _parallelism(
+        derived["cpu_ms_per_frame"], derived["lat_p50_ms"]
+    )
     derived.update(_completion(derived, bag_start, bag_end))
     return derived
+
+
+def _parallelism(cpu_ms_per_frame, lat_p50_ms):
+    """Cores kept busy while a frame was handled: processor time over wall time.
+
+    The one quantity here that barely moves with playback rate (faster-lio: 4.37 / 4.42 /
+    4.47 at 1x / 3x / 5x while both its inputs shifted 16-18%), and the only one that
+    tells "cheap because it computes less" from "cheap because it uses one core".
+
+    Not the configured thread count: point_lio, fast_lio and faster-lio read 1.00, 2.05
+    and 4.37 against compiled caps of 4, 3 and no OpenMP at all — faster-lio parallelises
+    through std::execution::par_unseq onto TBB. What it measures is how much of a frame
+    runs inside a parallel region. Biased low wherever saturated_frac is not ~0, queue
+    wait having inflated the denominator.
+    """
+    if not cpu_ms_per_frame or not lat_p50_ms:
+        return None
+    return cpu_ms_per_frame / lat_p50_ms
+
+
+def _cpu_per_frame(cpu_s_total, n_poses):
+    """Processor-milliseconds one frame cost, whatever the run's length or idle time.
+
+    Carries no information cpu_mean lacks — one quantity in two units, cpu_mean% =
+    cpu_ms_per_frame x frame rate / 10 — but dividing by frames rather than by time is
+    what stops a system that drops half the scans from reading as half the cost, and it
+    is the numerator of `parallelism`.
+
+    NOT comparable across playback rates: one FAST-LIO binary on one bag costs 41.4 /
+    36.1 / 22.3 ms per frame at 1x / 2x / 5x. Ruled out as the cause — startup dilution
+    (0.1-1.5%), differing provenance (identical preset/binary/commit, OMP_WAIT_POLICY
+    passive throughout), an idle spin floor (4-6%), and frequency scaling, which on this
+    host runs the wrong way (a busy core bills 2.5x MORE for the same instructions).
+    Still unexplained; part is idle-time background CPU amortised over fewer frames at
+    low rates. Compare within a rate only, as `rate` in FINGERPRINT already enforces.
+
+    Also a property of the build: MP_PROC_NUM is baked in from the build host's core
+    count, so the same source compiled on a smaller machine parallelises less. binary_sha
+    is in FINGERPRINT, so those are never one sample.
+    """
+    if not cpu_s_total or not n_poses:
+        return None
+    return cpu_s_total / n_poses * 1000.0
 
 
 def _completion(derived, bag_start, bag_end):
@@ -137,6 +214,11 @@ def trajectory_stats(tum_path):
         "end_pos_m": _dist(poses[0], poses[-1]),
         "traj_start": stamps[0],
         "traj_end": stamps[-1],
+        # One pose per processed scan, so this is the frame count cpu_ms_per_frame
+        # divides by. Taken from the trajectory rather than frame_events.csv on purpose:
+        # every run under results/ has a trajectory, including those recorded before the
+        # frame trace existed.
+        "n_poses": len(poses),
     }
 
 
@@ -152,18 +234,20 @@ def _read_poses(tum_path):
 
 
 def resource_stats(csv_path):
-    """Mean/max CPU% and peak RSS from the sampler's `wall_s,cpu_pct,rss_mb` trace.
+    """Mean/max CPU% and peak RSS from the sampler's `wall_s,cpu_pct,rss_mb` trace,
+    plus the processor time the whole run consumed.
 
     A trace with no sample rows yields None rather than 0 — the sampler writes a
     header-only file when it never finds the process, and 0 would read as
     "consumed no CPU" instead of "not measured".
     """
-    cpu, rss = [], []
+    stamps, cpu, rss = [], [], []
     with open(csv_path) as fh:
         next(fh, None)  # header
         for line in fh:
             f = line.strip().split(",")
             if len(f) >= 3:
+                stamps.append(float(f[0]))
                 cpu.append(float(f[1]))
                 rss.append(float(f[2]))
     if not cpu:
@@ -172,7 +256,219 @@ def resource_stats(csv_path):
         "cpu_mean": sum(cpu) / len(cpu),
         "cpu_max": max(cpu),
         "rss_max_MB": max(rss),
+        "cpu_s_total": _cpu_seconds(stamps, cpu),
     }
+
+
+def _cpu_seconds(stamps, cpu):
+    """Processor-seconds the sampled process consumed, reintegrated from the trace.
+
+    Each row of sample_resource.py holds the mean CPU% over the interval *ending* at its
+    own stamp, so each one is weighted by its own interval rather than averaged. On a
+    metronomic trace (measured: 0.501 s, max 0.502) this is the same as cpu_mean x span;
+    it differs exactly when the sampler stuttered, which is when the mean is wrong.
+
+    The first row's interval began before the trace did, so it is charged the median of
+    the intervals that are visible — the sampler's period is fixed, so that is what it
+    was. A single row has no interval to infer and yields None rather than a guess.
+    """
+    # Not filtered: every row must keep its own interval, or the zip below pairs a
+    # sample with someone else's duration.
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    if not gaps:
+        return None
+    first = statistics.median_low(gaps)
+    return sum(c / 100.0 * max(dt, 0.0) for c, dt in zip(cpu, [first] + gaps))
+
+
+def read_frame_events(csv_path):
+    """Split record_frames.py's `kind,stamp,wall` trace into its two event streams.
+
+    Both come back in sensor-stamp order, which for one-pose-per-scan is also the order
+    they were produced in — the order `pair_frames` walks.
+    """
+    ins, outs = [], []
+    with open(csv_path) as fh:
+        next(fh, None)  # header
+        for line in fh:
+            f = line.strip().split(",")
+            if len(f) != 3:
+                continue
+            try:
+                event = (float(f[1]), float(f[2]))
+            except ValueError:
+                continue
+            if f[0] == "in":
+                ins.append(event)
+            elif f[0] == "out":
+                outs.append(event)
+    ins.sort()
+    outs.sort()
+    return ins, outs
+
+
+# How far an output's stamp may sit from its scan's before that scan cannot be its
+# source. Scans of the same run are not evenly spaced — measured on MID-360, the interval
+# between input stamps wanders over 0.086–0.115 s around a nominal 0.1 — so the window has
+# to be wider than that jitter while staying well under the two periods a genuinely
+# skipped frame would put between them.
+SKIP_TOLERANCE_PERIODS = 1.5
+
+# Above this many outputs per input the one-pose-per-scan correspondence that pairing
+# rests on is not what the system is doing, and no timing is derived at all.
+MAX_OUTPUTS_PER_INPUT = 1.5
+
+
+def pair_frames(ins, outs, sensor_period):
+    """Match each output to the scan it came from.
+
+    Outputs consume inputs in order — one scan in, one pose out — so the k-th pose came
+    from the k-th scan consumed, and pairing is a two-pointer walk rather than a timestamp
+    lookup. An earlier version matched on stamps ("the most recent input not stamped later
+    than this output") and was wrong on real data: a baseline stamps its odometry at the
+    end of the sweep, roughly a period after the scan's own stamp, so whenever the next
+    scan arrives sooner than that the output lands past it and is credited to a scan not
+    yet processed. On one 11 729-frame run that misattributed 1 514 and claimed a 13 %
+    frame drop against a true count of zero.
+
+    Stamps still do the job order cannot: separating "the system skipped this scan" from
+    "it has not got to it yet". An output more than SKIP_TOLERANCE_PERIODS ahead of the
+    pending input walks the pointer past it — which is what the opening scans are, consumed
+    during IMU initialisation with no pose published.
+
+    Returns (pairs, skipped_in, unmatched_out); each pair is (wall_out, lat_ms, queued),
+    where lat_ms = wall_out - wall_in and `queued` marks a frame that arrived before its
+    predecessor was published, i.e. one whose lat_ms includes queue wait.
+    """
+    tol = SKIP_TOLERANCE_PERIODS * sensor_period
+    pairs = []
+    skipped = unmatched = 0
+    prev_out_wall = None
+    j = 0
+    for out_stamp, out_wall in outs:
+        # Scans consumed without a pose: the initialisation lead-in, or a genuine drop.
+        while j < len(ins) and out_stamp - ins[j][0] > tol:
+            j += 1
+            skipped += 1
+        # Nothing left to attribute this to, or it predates the pending scan.
+        if j >= len(ins) or out_stamp < ins[j][0] - tol:
+            unmatched += 1
+            continue
+        wall_in = ins[j][1]
+        if out_wall < wall_in:
+            # Published before its scan arrived: the correspondence has broken down. Drop
+            # the frame rather than admit a negative latency.
+            unmatched += 1
+            j += 1
+            continue
+        queued = prev_out_wall is not None and wall_in < prev_out_wall
+        pairs.append((out_wall, (out_wall - wall_in) * 1000.0, queued))
+        prev_out_wall = out_wall
+        j += 1
+    return pairs, skipped, unmatched
+
+
+def frame_stats(csv_path):
+    """Per-frame wall-clock latency from one run's frame event trace.
+
+    Three different kinds of nothing, kept distinct on purpose:
+      no events at all      -> everything null (never measured)
+      inputs but no matches -> out_ratio 0.0 (measured; the system emitted no pose)
+      no inputs at all      -> out_ratio null (the input topic was wrong)
+    """
+    ins, outs = read_frame_events(csv_path)
+    stats = dict(NO_FRAMES)
+    if not ins and not outs:
+        return stats
+
+    # Read off the input stream alone, and before pairing, which needs the sensor period.
+    # sensor_hz is on the sim-time axis, so it is the rig's true frame rate whatever the
+    # playback rate; the wall-clock rate beside it is what playback actually achieved, and
+    # their ratio is the only place that shows up — `rosbag play -r` does not guarantee
+    # the rate it was asked for, and metrics.json records only what was asked.
+    stats["sensor_hz"] = _median_rate([stamp for stamp, _ in ins])
+    wall_hz = _median_rate([wall for _, wall in ins])
+    if stats["sensor_hz"] and wall_hz:
+        stats["rate_actual"] = wall_hz / stats["sensor_hz"]
+    stats["in_jitter"] = _in_jitter([wall for _, wall in ins])
+
+    if not ins or stats["sensor_hz"] is None:
+        # Outputs with no scan stream to attribute them to: the input topic was wrong.
+        stats["unmatched_out"] = len(outs)
+        return stats
+    if len(outs) > MAX_OUTPUTS_PER_INPUT * len(ins):
+        # More poses than scans — the system is publishing per IMU sample rather than per
+        # scan (Point-LIO with publish_odometry_without_downsample), and one-pose-per-scan
+        # pairing would put confident numbers on frames it had matched wrongly.
+        stats["unmatched_out"] = len(outs)
+        return stats
+
+    pairs, skipped, unmatched = pair_frames(ins, outs, 1.0 / stats["sensor_hz"])
+    stats["skipped_in"] = skipped
+    stats["unmatched_out"] = unmatched
+    stats["out_ratio"] = len(pairs) / len(ins)
+
+    if not pairs:
+        return stats
+    lat = [p[1] for p in pairs]
+    # How much of lat_* is queue wait rather than the system's own work. Near 0 the
+    # latencies are the system; above that they are partly the backlog in front of it.
+    stats["saturated_frac"] = sum(1 for p in pairs if p[2]) / len(pairs)
+    stats["lat_p50_ms"] = _nearest_rank(lat, 0.50)
+    stats["lat_p99_ms"] = _nearest_rank(lat, 0.99)
+    stats["lag_growth_ms"] = _lag_growth(lat)  # pairs are already in output order
+    return stats
+
+
+def _in_jitter(walls):
+    """p99 / p50 of the gaps between input arrivals — how evenly the bag was delivered.
+
+    1.0 is a metronome, and it is the precondition every latency here rests on: scans
+    arriving in clumps queue behind each other without the system being behind at all.
+    Measured 1.07-1.08 on smooth replays against 4.31 on one played off an external drive,
+    which stalled 349 times for 28.3 s total (12 % of the replay) and then delivered the
+    backlog in bursts.
+    """
+    gaps = sorted(b - a for a, b in zip(walls, walls[1:]) if b > a)
+    if len(gaps) < 2:
+        return None
+    p50 = gaps[_nearest_index(gaps, 0.50)]
+    return (gaps[_nearest_index(gaps, 0.99)] / p50) if p50 > 0 else None
+
+
+def _nearest_index(ordered, q):
+    return max(1, math.ceil(q * len(ordered))) - 1
+
+
+def _median_rate(values):
+    """Hz from the median gap between consecutive values, or None below two of them."""
+    gaps = [b - a for a, b in zip(values, values[1:]) if b > a]
+    if not gaps:
+        return None
+    return 1.0 / statistics.median_low(gaps)
+
+
+def _nearest_rank(values, q):
+    """The q-quantile as a real observation — no interpolation.
+
+    Same reason as `summarize`'s median_low: an interpolated percentile can land on a
+    value no frame ever took.
+    """
+    ordered = sorted(values)
+    return ordered[_nearest_index(ordered, q)]
+
+
+def _lag_growth(values):
+    """How much further behind the run ended than it started, in ms.
+
+    First and last tenth compared by low median rather than a regression slope over the
+    whole run: robust to the odd outlier, and "800 ms further behind by the end" is a
+    sentence, where "slope 2.3 ms/s" needs one built around it.
+    """
+    if len(values) < MIN_FRAMES_FOR_LAG:
+        return None
+    k = max(1, len(values) // 10)
+    return statistics.median_low(values[-k:]) - statistics.median_low(values[:k])
 
 
 def collect(dataset_dir, min_coverage=DEFAULT_MIN_COVERAGE):
@@ -231,7 +527,12 @@ def _write_derived(metrics_path, derived):
     metrics_path.write_text(json.dumps(on_disk, indent=2, sort_keys=True) + "\n")
 
 
-FINGERPRINT = ("preset_sha", "binary_sha", "system_commit")
+# `rate` belongs here with the build fingerprints because playback speed changes what the
+# numbers mean, not just their spread: at 5x every wall-clock second carries five seconds
+# of work, so CPU% is a different quantity, and end-to-end latency stops being a property
+# of the system at all (§ the rate note in render_text). Runs at different rates are
+# therefore never one sample, exactly as runs from different binaries are not.
+FINGERPRINT = ("preset_sha", "binary_sha", "system_commit", "rate")
 
 
 def group_runs(records):
@@ -279,7 +580,57 @@ def group_runs(records):
     return groups
 
 
-METRICS = ("path_len_m", "end_pos_m", "cpu_mean", "cpu_max", "rss_max_MB")
+# The table columns, as (derived key, heading, decimal places). Split in two because one
+# table wide enough for all of them does not fit a terminal, along the plan's own boundary
+# of accuracy (§6) against real-time performance (§7).
+ACCURACY_COLUMNS = (
+    ("path_len_m", "path_len_m", 1),
+    ("end_pos_m", "end_pos_m", 1),
+)
+PERF_COLUMNS = (
+    ("lat_p50_ms", "lat_p50ms", 1),
+    ("lat_p99_ms", "lat_p99ms", 1),
+    ("cpu_ms_per_frame", "cpu_ms/f", 1),
+    ("parallelism", "parallel", 2),
+    ("cpu_mean", "cpu_mean%", 1),
+    ("cpu_max", "cpu_max%", 1),
+    ("rss_max_MB", "rss_max_MB", 1),
+    ("saturated_frac", "sat", 2),
+    ("out_ratio", "out_ratio", 3),
+)
+COLUMNS = ACCURACY_COLUMNS + PERF_COLUMNS
+
+# Printed under the real-time table. Here rather than in render_text because it documents
+# the columns above it, and the two drift apart if they live in different files' worth of
+# scrolling.
+PERF_LEGEND = (
+    "lat_p50ms = wall clock from scan arriving to its pose being published, and",
+    "lat_p99ms the tail of the same — the tail is what misses a deadline, not the",
+    "median, so a system is only comfortably real-time when p99 fits the frame period.",
+    "cpu_ms/f  = processor time one frame cost (total CPU seconds / poses produced).",
+    "parallel  = cpu_ms/f over lat_p50ms, i.e. cores busy while a frame was handled.",
+    "sat       = share of frames that arrived before the previous one was published,",
+    "            so their lat_* includes queue wait. Near 0 the latencies are the",
+    "            system; well above it they are partly the backlog in front of it.",
+    "out_ratio = 1.0 when every input scan produced a pose.",
+    "",
+    "Neither latency column compares across playback rates: part of lat_* is waiting for",
+    "the other topics a scan needs, which is a bag-time quantity and so shrinks by the",
+    "rate. Judge real-time behaviour at the rate the sensor actually runs.",
+)
+
+# Summarized into stats.json but kept out of the tables, which are already as wide as a
+# terminal allows.
+JSON_ONLY_METRICS = (
+    "lag_growth_ms",
+    "sensor_hz",
+    "rate_actual",
+    "in_jitter",
+    "skipped_in",
+    "unmatched_out",
+)
+
+METRICS = tuple(key for key, _, _ in COLUMNS) + JSON_ONLY_METRICS
 SPLIT_METRIC = "end_pos_m"
 
 
@@ -357,32 +708,17 @@ def _dist(a, b):
     return math.sqrt(sum((p - q) ** 2 for p, q in zip(a, b)))
 
 
-COLUMNS = (
-    ("path_len_m", "path_len_m"),
-    ("end_pos_m", "end_pos_m"),
-    ("cpu_mean", "cpu_mean%"),
-    ("cpu_max", "cpu_max%"),
-    ("rss_max_MB", "rss_max_MB"),
-)
-
-
 def render_text(dataset, stats):
-    """The human-readable table. stats.json carries the same content verbatim."""
+    """The human-readable tables. stats.json carries the same content verbatim."""
     labels = _labels(stats)
     width = max([len(l) for l in labels] + [10])
 
-    header = ["system", "preset", "n"] + [label for _, label in COLUMNS]
-    rows = [
-        # The preset cell carries the label's `#N` suffix so a split group's rows are
-        # distinguishable in the table itself, not only in the sections below.
-        [s["system"], label.split("/", 1)[1], _n_cell(s)]
-        + [_cell(s["metrics"][key]) for key, _ in COLUMNS]
-        for label, s in zip(labels, stats)
-    ]
-    out = [
-        "# {} — N-run repeatability: median [min–max]".format(dataset),
-        "",
-    ] + _table([header] + rows)
+    out = ["# {} — N-run repeatability: median [min–max]".format(dataset), ""]
+    out += ["## accuracy", ""] + _metric_table(labels, stats, ACCURACY_COLUMNS)
+    out += ["", "## real-time", ""] + _metric_table(labels, stats, PERF_COLUMNS)
+    out += [""] + list(PERF_LEGEND)
+    out += _jitter_note(labels, stats)
+    out += _rate_note(labels, stats)
 
     mixed = [l for l, s in zip(labels, stats) if not s["consistent"]]
     if mixed:
@@ -425,8 +761,9 @@ def render_text(dataset, stats):
     for label, s in zip(labels, stats):
         fp = s["fingerprint"]
         out.append(
-            "{:<{w}}  preset_sha {}  binary_sha {}  commit {}".format(
+            "{:<{w}}  rate {}  preset_sha {}  binary_sha {}  commit {}".format(
                 label,
+                "?" if fp.get("rate") is None else _num(fp["rate"]),
                 _short(fp.get("preset_sha")),
                 _short(fp.get("binary_sha")),
                 _short(fp.get("system_commit")),
@@ -458,6 +795,74 @@ def _labels(stats):
     return labels
 
 
+def _metric_table(labels, stats, columns):
+    header = ["system", "preset", "n"] + [label for _, label, _ in columns]
+    rows = [
+        # The preset cell carries the label's `#N` suffix so a split group's rows are
+        # distinguishable in the table itself, not only in the sections below.
+        [s["system"], label.split("/", 1)[1], _n_cell(s)]
+        + [_cell(s["metrics"][key], places) for key, _, places in columns]
+        for label, s in zip(labels, stats)
+    ]
+    return _table([header] + rows)
+
+
+# Above this ratio of p99 to median input gap the bag was not delivered on the schedule
+# the sensor recorded it on. Measured: 1.07–1.08 on smooth replays, 4.31 on one that
+# stalled for 12 % of its duration, so the line sits far from both.
+MAX_IN_JITTER = 1.5
+
+
+def _jitter_note(labels, stats):
+    """Name the runs whose input never arrived smoothly, and say what that costs.
+
+    This comes first because it is upstream of everything else in the table: when scans
+    arrive in clumps, a frame lands while the previous is still being processed without
+    the system being behind at all, so `sat` fills up and `lat_*` inherits a queue the bag
+    reader created rather than the system.
+    """
+    rough = []
+    for label, s in zip(labels, stats):
+        summary = s["metrics"].get("in_jitter")
+        if summary and summary["max"] > MAX_IN_JITTER:
+            rough.append("{} ({:.1f}x)".format(label, summary["max"]))
+    if not rough:
+        return []
+    return [
+        "",
+        "⚠ UNEVEN INPUT: {}".format(", ".join(rough)),
+        "  The p99 gap between input scans is that many times the median, so playback did",
+        "  not feed the system at the rate the sensor recorded. Frames arriving in clumps",
+        "  queue behind each other on their own, which inflates sat and puts the reader's",
+        "  backlog into lat_*. Treat every timing in this row as describing the replay, not",
+        "  the system, and re-run from storage that sustains the rate.",
+    ]
+
+
+def _rate_note(labels, stats):
+    """Name the groups played at anything but 1.0x, and say what that costs.
+
+    They are already a separate sample — `rate` is part of FINGERPRINT — but the split
+    alone does not tell a reader that half the columns in front of them stopped
+    describing the system.
+    """
+    off = [
+        "{} ({}x)".format(label, _num(s["fingerprint"]["rate"]))
+        for label, s in zip(labels, stats)
+        if s["fingerprint"].get("rate") not in (None, 1.0)
+    ]
+    if not off:
+        return []
+    return [
+        "",
+        "⚠ NOT 1.0x: {}".format(", ".join(off)),
+        "  Every column above describes the playback speed as much as the system, and none",
+        "  of them convert back to 1.0x. Measured on one bag, point_lio reads lat_p50 21.1 /",
+        "  18.8 / 14.8 ms and cpu_ms/f 21.0 / 16.8 / 12.4 at 1x / 3x / 5x, from one binary on",
+        "  one dataset. Only `parallel` held still (faster-lio: 4.37 / 4.42 / 4.47).",
+    ]
+
+
 def _table(rows):
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return [
@@ -476,19 +881,23 @@ def _n_cell(s):
     return "{}{}".format(s["n"], " ({})".format(", ".join(notes)) if notes else "")
 
 
-def _cell(summary):
+def _cell(summary, places=1):
     """`median [min–max]`, collapsed to the bare value when the runs agree."""
     if summary is None:
         return "-"
     if summary["min"] == summary["max"]:
-        return _num(summary["median"])
+        return _num(summary["median"], places)
     return "{} [{}–{}]".format(
-        _num(summary["median"]), _num(summary["min"]), _num(summary["max"])
+        _num(summary["median"], places),
+        _num(summary["min"], places),
+        _num(summary["max"], places),
     )
 
 
-def _num(value):
-    return "{:.1f}".format(value).rstrip("0").rstrip(".")
+def _num(value, places=1):
+    """One decimal by default; ratios need more before rounding erases the signal —
+    out_ratio 0.998 is a system dropping two frames in a thousand, and 1.0 is not."""
+    return "{:.{p}f}".format(value, p=places).rstrip("0").rstrip(".")
 
 
 def _short(sha):

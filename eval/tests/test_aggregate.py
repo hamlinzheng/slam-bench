@@ -51,7 +51,7 @@ def test_single_pose_trajectory_is_rejected(tmp_path):
 
 
 def write_resource(path, rows):
-    """rows: [(cpu_pct, rss_mb), ...] — the wall_s column is not read."""
+    """rows: [(cpu_pct, rss_mb), ...] — one sample per second."""
     path.write_text(
         "wall_s,cpu_pct,rss_mb\n"
         + "".join("{:.3f},{},{}\n".format(i, c, r) for i, (c, r) in enumerate(rows))
@@ -65,7 +65,39 @@ def test_resource_stats_report_mean_and_max_cpu_and_peak_rss(tmp_path):
         "cpu_mean": 200.0,
         "cpu_max": 300.0,
         "rss_max_MB": 30.0,
+        "cpu_s_total": 6.0,  # (100 + 200 + 300)% x 1 s each
     }
+
+
+def test_cpu_seconds_integrate_each_sample_over_its_own_interval(tmp_path):
+    """Not cpu_mean x span: the sampler's rows are a rate, and unevenly spaced rows would
+    weight a long interval the same as a short one."""
+    path = tmp_path / "resource.csv"
+    # Two 1 s samples at 100%, then one covering a 4 s gap at 50%:
+    # 1.0 + 1.0 + 2.0 = 4.0 CPU-seconds. Weighting the three rows equally instead would
+    # give cpu_mean 83.3% over a 5 s span = 4.17.
+    path.write_text("wall_s,cpu_pct,rss_mb\n1.000,100,10\n2.000,100,10\n6.000,50,10\n")
+    assert aggregate.resource_stats(path)["cpu_s_total"] == pytest.approx(4.0)
+
+
+def test_cpu_seconds_are_absent_when_one_sample_cannot_show_its_interval(tmp_path):
+    # A lone row carries a rate but no duration to apply it over. None, not zero.
+    csv = write_resource(tmp_path / "resource.csv", [(100, 10)])
+    assert aggregate.resource_stats(csv)["cpu_s_total"] is None
+
+
+def test_cpu_per_frame_divides_processor_time_by_the_poses_produced(tmp_path):
+    """The quantity this exists for: CPU cost of one frame, independent of how long the
+    run took or how much of it the process spent idle."""
+    write_tum(tmp_path / "trajectory.tum", TRIANGLE)  # 3 poses
+    # 3 samples of 200% at 1 s each = 6 CPU-seconds over 3 frames = 2000 ms/frame.
+    write_resource(tmp_path / "resource.csv", [(200, 10)] * 3)
+    assert aggregate._derive(tmp_path)["cpu_ms_per_frame"] == pytest.approx(2000.0)
+
+
+def test_cpu_per_frame_is_absent_when_the_run_has_no_resource_trace(tmp_path):
+    write_tum(tmp_path / "trajectory.tum", TRIANGLE)
+    assert aggregate._derive(tmp_path)["cpu_ms_per_frame"] is None
 
 
 def test_summary_reports_count_median_min_and_max():
@@ -94,6 +126,7 @@ def test_resource_stats_of_a_header_only_file_are_absent_not_zero(tmp_path):
         "cpu_mean": None,
         "cpu_max": None,
         "rss_max_MB": None,
+        "cpu_s_total": None,
     }
 
 

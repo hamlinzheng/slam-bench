@@ -2,6 +2,8 @@
 # Run one baseline once, over one bag, and capture the normalized artifacts:
 #   ① trajectory.tum   — odom topic recorded to TUM
 #   ③ resource.csv     — external /proc CPU% + RSS sampling of the system process
+#   ③ frame_events.csv — arrival wall clock of every input scan and every output odom,
+#                        from which eval/aggregate.py derives per-frame latency
 #      run.log         — system stdout/stderr
 #      metrics.json    — run record: completion + full provenance (accuracy metrics later)
 #
@@ -164,6 +166,7 @@ write_metrics() {
   M_SYSTEM=$SYS M_PRESET=$PRESET M_RUN=$RUN_INDEX M_DATASET=$DATASET M_RATE=$RATE \
   M_PLATFORM=$(uname -m) M_STATUS=$STATUS M_STARTED_AT=$STARTED_AT \
   M_OMP_WAIT_POLICY=$OMP_WAIT_POLICY M_SYS_ALIVE=$SYS_ALIVE \
+  M_CPU_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true) \
   M_WALL_S=$((SECONDS - START_S)) M_PLAY_EXIT=$PLAY_EXIT M_POSES=$TRAJ_LINES \
   M_BAG_START=$BAG_START M_BAG_END=$BAG_END \
   M_PRESET_SHA=$(cat "$LAUNCH" "${CFGS[@]}" | sha256sum | cut -d' ' -f1) \
@@ -199,6 +202,10 @@ record = {
     "platform": text("M_PLATFORM"),
     # CPU% only compares across runs sharing this. Absent = predates it, i.e. libgomp's default.
     "omp_wait_policy": text("M_OMP_WAIT_POLICY"),
+    # The host's CPU frequency governor. Under `powersave` the clock tracks demand, so a
+    # lightly-loaded run executes the same frame more slowly than a saturated one — every
+    # per-frame timing here only compares across runs that agree on this.
+    "cpu_governor": text("M_CPU_GOVERNOR"),
     "status": text("M_STATUS"),
     "started_at": text("M_STARTED_AT"),
     "wall_s": num("M_WALL_S", int),
@@ -225,7 +232,8 @@ PY
 
 cleanup() {
   kill -INT "${PLAY_PID:-}" 2>/dev/null || true
-  kill -INT "${REC_PID:-}" "${SAMP_PID:-}" 2>/dev/null || true
+  kill -INT "${REC_PID:-}" "${SAMP_PID:-}" "${FRAMES_PID:-}" 2>/dev/null || true
+  rm -f "${FRAMES_READY:-}" 2>/dev/null || true
   sleep 1
   kill -INT "${LAUNCH_PID:-}" 2>/dev/null || true
   sleep 2
@@ -289,9 +297,17 @@ roslaunch "$LAUNCH" rviz:="${RVIZ:-false}" > "$OUT/run.log" 2>&1 & LAUNCH_PID=$!
 wait_for 120 "$SYS to subscribe to $BENCH_LIDAR_TOPIC (see $OUT/run.log)" \
   bash -c "rostopic list -s | grep -qx '$BENCH_LIDAR_TOPIC'" || exit 9
 
-# Recorders: ① trajectory, ③ resource trace.
+# Recorders: ① trajectory, ③ resource trace + frame event trace.
+#
+# All three start AFTER the subscription gate above, and record_frames.py must: that gate
+# asks whether $BENCH_LIDAR_TOPIC has a subscriber, and record_frames.py subscribes to it
+# too — started any earlier it would hold the gate open on the system under test's behalf
+# and playback would begin before the system was listening.
 python3 "$REPO/eval/record_tum.py"      --topic "$ODOM" --out "$OUT/trajectory.tum" & REC_PID=$!
 python3 "$REPO/eval/sample_resource.py" --proc "$PROC"  --out "$OUT/resource.csv"   & SAMP_PID=$!
+FRAMES_READY=$(mktemp -u)   # -u: a name, not a file — its appearance is the signal
+python3 "$REPO/eval/record_frames.py" --in-topic "$BENCH_LIDAR_TOPIC" --odom "$ODOM" \
+  --out "$OUT/frame_events.csv" --ready-file "$FRAMES_READY" & FRAMES_PID=$!
 
 # Playback must not start until the recorder is actually subscribed, or the opening poses
 # are dropped. (This is not what makes a healthy run's coverage 0.99 rather than 1.00 —
@@ -299,6 +315,13 @@ python3 "$REPO/eval/sample_resource.py" --proc "$PROC"  --out "$OUT/resource.csv
 # and closing this race did not change it. The race is real but was not the cause.)
 wait_for 60 "the trajectory recorder to subscribe to $ODOM" \
   bash -c "rostopic info '$ODOM' | sed -n '/Subscribers:/,\$p' | grep -q '\*'" || exit 10
+
+# Same race, same reason, for the frame recorder — an input scan that arrives before it is
+# listening is one this run can never account for, and out_ratio would report the system
+# as having dropped it. The ready file appears once both of its subscriptions exist.
+wait_for 60 "the frame recorder to subscribe to $BENCH_LIDAR_TOPIC and $ODOM" \
+  test -e "$FRAMES_READY" || exit 11
+rm -f "$FRAMES_READY"
 
 # Playback with /clock for completion + real-time-factor assessment.
 #

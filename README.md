@@ -14,7 +14,8 @@ docker/      unified Noetic image + compose (build / run / compare / aggregate /
 scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (shared rules)
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
 eval/        record_tum.py (trajectory ①), sample_resource.py (resource ③),
-             aggregate.py (N-run statistics), compare.sh (evo overlay), tests/ (pytest)
+             record_frames.py (frame timing ③), aggregate.py (N-run statistics),
+             compare.sh (evo overlay), tests/ (pytest)
 bridge/      CustomMsg→PointCloud2 uniform input (only needed once a PC2-only baseline lands)
 results/     per-run artifacts (gitignored)
 ```
@@ -76,7 +77,7 @@ BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio RVIZ=true ./bench.sh run
 | `SYS` | **required** — `fast_lio` \| `faster_lio` \| `point_lio` \| `super_lio` \| `pv_lio` \| `bievr_lio`, one or more, space separated |
 | `N` | runs per (system, preset), default `1` |
 | `PRESET` | one or more, default `default` = the as-shipped launch (see [`configs/presets/`](configs/presets/README.md)) |
-| `RATE` | playback speed multiplier (default `1.0` — the rate latency and real-time factor are defined at; raise it only for smoke runs) |
+| `RATE` | playback speed multiplier (default `1.0` — the rate every timing and CPU number is defined at. No per-frame cost here is rate-portable, so raise it only for runs whose numbers will not be compared against 1×; runs at different rates are never merged into one sample) |
 | `BAG` | default `/bags` (a directory → all `*.bag` played in timestamp order as one stream); or `/bags/one.bag` |
 | `RUN` | explicit run index, `FORCE=true` to overwrite it — only accepted when the batch is a single run |
 | `RVIZ` | `true` opens the system's rviz (needs `xhost +local:root` — see [Interactive shell](#interactive-shell-debugging)) |
@@ -109,6 +110,9 @@ each other:
 
 - `trajectory.tum` — odom in TUM format (artifact ①)
 - `resource.csv` — external CPU%/RSS trace (artifact ③)
+- `frame_events.csv` — arrival wall clock of every input scan (`in`) and every output odom
+  (`out`), artifact ③'s timing half. Raw events only: `aggregate.py` pairs them, so a better
+  pairing rule later costs seconds rather than another replay of every bag
 - `run.log` — system stdout/stderr
 - `metrics.json` — completion + provenance (`preset_sha`, `binary_sha`, submodule commit
   and dirty state, `omp_wait_policy`, the played bag's `bag_start`/`bag_end`), plus the derived
@@ -143,9 +147,53 @@ dataset, not of the metric.
 Flags after the dataset name are passed straight to `eval/aggregate.py`, so `--help` on it
 lists everything available and a new option needs declaring in one place only.
 
-If runs inside one group were built from different configurations or binaries, the group is
-split by fingerprint and flagged `⚠ MIXED` rather than silently averaged — the failure mode
-that once invalidated a whole configuration sweep here.
+If runs inside one group were built from different configurations or binaries — **or played
+at different rates** — the group is split by fingerprint and flagged `⚠ MIXED` rather than
+silently averaged. That is the failure mode which once invalidated a whole configuration
+sweep here; playback rate belongs in the same fingerprint because at 5× every wall-clock
+second carries five seconds of work, so CPU% is not even the same quantity.
+
+`stats.txt` carries two tables. **accuracy** is `path_len_m` and `end_pos_m`; **real-time**
+puts resource cost and frame timing on one row, which is the only place the two can be read
+against each other:
+
+| Column | Meaning |
+|---|---|
+| `lat_p50ms` / `lat_p99ms` | end-to-end latency, queueing included. The tail is what misses a deadline |
+| `cpu_ms/f` | processor time one frame cost: total CPU seconds ÷ poses produced |
+| `parallel` | `cpu_ms/f` ÷ `lat_p50ms` — cores kept busy while a frame was handled |
+| `sat` | fraction of frames that arrived while the previous was still being processed |
+| `out_ratio` | poses out ÷ scans in. Below 1 = the system is skipping frames |
+
+**A system can be cheap on CPU for three different reasons**, and it takes two columns to tell
+them apart: it computes less, it is falling behind, or it uses one core where another uses four.
+Measured at 1× on one NORCAT bag, Point-LIO / FAST-LIO / faster-lio all land at 21.1 / 21.0 /
+18.1 ms of latency — near enough to call equivalent — while their CPU per frame is 21.0 / 42.9 /
+79.1 ms. Both readings are true; `parallel` (1.00 / 2.05 / 4.37) is the difference.
+
+**Read `sat` before any latency.** Above roughly zero it means frames are queueing, and their
+latency is partly the backlog in front of them rather than the system's own work. `cpu_ms/f` is
+immune — waiting costs no processor time.
+
+**And read the warnings before that.** A high `sat` only means the system was behind if the input
+arrived evenly. On one 5× run it did not: playback off an external drive stalled 349 times for
+28.3 s — 12 % of the replay — and delivered the backlog in clumps, so frames queued while FAST-LIO
+was in fact keeping up (11 729 poses for 11 732 scans). That is what `in_jitter` and `⚠ UNEVEN
+INPUT` exist to catch; above 1.5 every timing in the row describes the replay, not the system.
+
+**Nothing here survives a change of playback rate.** Both per-frame costs fall as the rate rises —
+Point-LIO reads 21.1 / 18.8 / 14.8 ms of latency and 21.0 / 16.8 / 12.4 ms of CPU at 1× / 3× / 5×
+on one binary and one bag. Part is definitional (a scan waits for the IMU covering it, which is a
+bag-time wait and so shrinks by the rate) and the rest is unexplained. Only `parallel` holds still.
+Judge real-time behaviour at the rate the sensor actually runs; rate is in the fingerprint, so such
+runs never merge. `stats.json` additionally carries `lag_growth_ms` (how much further behind the
+run ended than it started, which separates a queue that drains from one that diverges), `sensor_hz`,
+`rate_actual` (what the replay actually achieved, which `rosbag play -r` does not guarantee),
+`in_jitter`, `skipped_in` (scans consumed with no pose — the initialisation lead-in, measured at
+3–5 frames, plus any genuine drop) and `unmatched_out`.
+
+Runs recorded before `frame_events.csv` existed report every one of these as null, never as
+zero — the same rule the resource trace already follows.
 
 A run is excluded from the statistics, with its reason shown in the table, when any of these
 holds:
