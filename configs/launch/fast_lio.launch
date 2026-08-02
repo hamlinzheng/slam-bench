@@ -1,6 +1,6 @@
 <launch>
-  <!-- slam-bench FAST-LIO run. Mirrors upstream mapping_mid360.launch parameters
-       verbatim (as-shipped defaults); only the config path points to our
+  <!-- slam-bench FAST-LIO run. Follows upstream mapping_mid360.launch except for the
+       three preprocessing parameters marked CHANGED below; the config path points to our
        override and rviz defaults off (headless benchmark). -->
   <arg name="rviz" default="false" />
   <arg name="config" default="/slam-bench/configs/systems/fast_lio_mid360.yaml" />
@@ -8,8 +8,14 @@
   <rosparam command="load" file="$(arg config)" />
 
   <param name="feature_extract_enable" type="bool"   value="0" />
+  <!-- CHANGED: upstream 3; one setting with the two filter sizes below, measured together. -->
   <param name="point_filter_num"       type="int"    value="1" />
   <param name="max_iteration"          type="int"    value="3" />
+  <!-- CHANGED: both 0.5 upstream. Nobody recorded why, so it was measured: restoring all three
+       upstream values on NORCAT_20250908_123907 puts two of three runs back into the t~1140 s
+       divergence that acc_cov=0.5 otherwise cures, end_pos 6.1/7.8/5.6 m -> 395/181/23 m.
+       Point density and the noise model are not independent — the degenerate tunnel needs both.
+       Upstream is cheaper (16.5 vs 22.0 ms CPU/frame, 290 vs 625 MB); that is what it buys. -->
   <param name="filter_size_surf"       type="double" value="0.25" />
   <param name="filter_size_map"        type="double" value="0.25" />
   <param name="cube_side_length"       type="double" value="1000" />

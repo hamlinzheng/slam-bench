@@ -1,7 +1,9 @@
 # Override of Super-LIO/src/super_lio/config/livox_360.yaml for the slam-bench rig.
-# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lidar_topic/imu_topic
-# point to our bag's topics and save_map is disabled (map artifact ② is accumulated externally).
-# All algorithm parameters are left at upstream defaults.
+# Plumbing changed vs upstream: lidar_topic/imu_topic point to our bag's topics and save_map
+# is disabled (map artifact ② is accumulated externally).
+#
+# ONE algorithm parameter also departs from upstream — imu_na, see its own note below. Every
+# other algorithm parameter is at the upstream default.
 #
 # save_map matters more here than in the other systems: g_save_map_dir resolves to
 # ROOT + "map", and ROOT is baked in at compile time as the package SOURCE directory
@@ -36,7 +38,15 @@ lio:
     voxel_fliter_size: 0.5
     gravity_norm: 9.7946
     imu_type: 1
-    imu_na: 0.1
+    # CHANGED: was 0.1, the FAST-LIO2 family default that FAST-LIO and faster-lio ship too.
+    # Accelerometer measurement noise (-> options.acce_var_, super_lio.cpp:145); too tight here,
+    # so the filter over-trusts the IMU where a specific-force transient meets a degenerate
+    # tunnel. All 3 runs of NORCAT_20250908_123907 diverged at t~1140 s — grade reversing while
+    # braking 3.6 -> 0 m/s in six seconds — ending at 48 779 / 296 504 / 296 773 m; at 0.5 it is
+    # 5.1 m on all three. 0.5 is PV-LIO's shipped acc_cov, not a fit to this bag; 1.0 is worse
+    # (7.1-9.7 m). FAST-LIO fails identically and takes the same fix. Unexplained: faster-lio
+    # carries 0.1 and never diverged. Verified at 5x only.
+    imu_na: 0.5
     imu_ng: 0.1
     imu_nba: 0.0001
     imu_nbg: 0.0001

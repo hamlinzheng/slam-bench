@@ -1,7 +1,9 @@
 # Override of faster-lio/config/mid360.yaml for the slam-bench rig.
-# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lid_topic/imu_topic point to our
-# bag's topics and pcd_save is disabled (map artifact ② is accumulated externally).
-# All algorithm parameters are left at upstream defaults.
+# Plumbing changed vs upstream: lid_topic/imu_topic point to our bag's topics and pcd_save is
+# disabled (map artifact ② is accumulated externally).
+#
+# TWO algorithm parameters also depart from upstream — filter_size_surf and filter_size_map,
+# marked CHANGED below. Every other algorithm parameter is at the upstream default.
 common:
     lid_topic: "/sensing/front/livox/lidar"
     imu_topic: "/sensing/front/livox/imu"
@@ -36,6 +38,9 @@ pcd_save:
 feature_extract_enable: false
 point_filter_num: 1
 max_iteration: 3
+# CHANGED: upstream 0.1 and 0.3. Both set to 0.25, the same resolution configs/launch/fast_lio.launch
+# gives FAST-LIO — the two were matched to each other rather than left as shipped, so neither is an
+# as-shipped result. Origin unknown; left as found.
 filter_size_surf: 0.25
 filter_size_map: 0.25
 cube_side_length: 1000

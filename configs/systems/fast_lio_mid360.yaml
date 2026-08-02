@@ -1,7 +1,9 @@
 # Override of FAST_LIO/config/mid360.yaml for the slam-bench rig.
-# ONLY plumbing changed vs upstream (fairness rule: as-shipped defaults): lid_topic/imu_topic point to our
-# bag's topics and pcd_save is disabled (map artifact ② is accumulated externally).
-# All algorithm parameters are left at upstream defaults.
+# Plumbing changed vs upstream: lid_topic/imu_topic point to our bag's topics and pcd_save is
+# disabled (map artifact ② is accumulated externally).
+#
+# ONE algorithm parameter also departs from upstream — acc_cov, see its own note below. Every
+# other algorithm parameter is at the upstream default.
 common:
     lid_topic:  "/sensing/front/livox/lidar"
     imu_topic:  "/sensing/front/livox/imu"
@@ -14,7 +16,14 @@ preprocess:
     blind: 0.5
 
 mapping:
-    acc_cov: 0.1
+    # CHANGED: was 0.1, which faster-lio and Super-LIO ship too. Too tight here, so the filter
+    # over-trusts the IMU where a specific-force transient meets a degenerate tunnel. Two of
+    # three runs of NORCAT_20250908_123907 diverged at t~1140 s — grade reversing while braking
+    # 3.6 -> 0 m/s in six seconds — ending at 544 / 32 / 349 m; at 0.5 it is 6.1 / 7.8 / 5.6 m
+    # with no divergence and no change in cost. 0.5 is PV-LIO's shipped acc_cov, not a fit to
+    # this bag. Super-LIO fails identically (its imu_na) and takes the same fix. Unexplained:
+    # faster-lio carries 0.1 and never diverged. Verified at 5x only.
+    acc_cov: 0.5
     gyr_cov: 0.1
     b_acc_cov: 0.0001
     b_gyr_cov: 0.0001
@@ -25,6 +34,7 @@ mapping:
     extrinsic_R: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
 
 publish:
+    # CHANGED: upstream false. Publishes /path; costs a little bandwidth, touches no state.
     path_en: true
     scan_publish_en: true
     dense_publish_en: true
