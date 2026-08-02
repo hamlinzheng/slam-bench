@@ -27,6 +27,7 @@ x-common: &common
     - FORCE                   # true → let RUN overwrite an existing run directory
     - AGG_ARGS                # aggregate: extra flags for aggregate.py
     - ALL                     # compare: overlay every run, not just medians
+    - PLOT                    # compare: true → also open a live window (X11 must reach the container)
     - OMP_WAIT_POLICY         # run_system.sh defaults it to `passive`; set `active` to override
   volumes:
     - ..:/slam-bench

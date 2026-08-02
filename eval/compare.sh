@@ -12,6 +12,7 @@
 # Usage (inside the container): eval/compare.sh <dataset> [plot_mode]
 #   plot_mode: xyz (default, 3D) | xy | xz | yz
 #   ALL=true   overlay every run instead of each group's median run
+#   PLOT=true  also open a live window (needs X11 reachable from the container)
 set -uo pipefail
 DS=${1:?usage: compare.sh <dataset> [xyz|xy|xz|yz]}
 MODE=${2:-xyz}
@@ -86,16 +87,30 @@ if [ "${#TUMS[@]}" -gt 1 ]; then
   TUMS=("${TUMS[@]:1}")
 fi
 
-# Always save the PDF; also open a live window when a display is available. Remove any
-# prior PDF first — evo prompts interactively before overwriting, which deadlocks under
-# a non-interactive service (no stdin).
-rm -f "$RES/compare.pdf"
-if [ -n "${DISPLAY:-}" ]; then
+# Rendered to a scratch path and moved in only on success: evo prompts before overwriting,
+# which deadlocks a service with no stdin, so writing straight to the destination meant
+# deleting the old PDF first and losing it whenever a re-render failed.
+#
+# Headless by default, window opt-in. The old test was `[ -n "$DISPLAY" ]`, but DISPLAY comes
+# from the host through docker-compose and says nothing about whether this container can reach
+# an X server — on a desktop host it is always set, so the window branch was the default, and
+# there `--plot` blocks on a window nobody can close and the PDF is never written.
+OUT=$TMP/compare.pdf
+if [ "${PLOT:-false}" = "true" ]; then
   evo_traj tum "${TUMS[@]}" ${ALIGN[@]+"${ALIGN[@]}"} \
-    --plot_mode "$MODE" --plot --save_plot "$RES/compare.pdf"
+    --plot_mode "$MODE" --plot --save_plot "$OUT"
 else
   MPLBACKEND=Agg evo_traj tum "${TUMS[@]}" ${ALIGN[@]+"${ALIGN[@]}"} \
-    --plot_mode "$MODE" --save_plot "$RES/compare.pdf"
+    --plot_mode "$MODE" --save_plot "$OUT"
 fi
+STATUS=$?
+
+# Both conditions: evo can exit 0 having drawn nothing, so the file must also exist.
+if [ "$STATUS" -ne 0 ] || [ ! -s "$OUT" ]; then
+  echo "compare: evo wrote no plot (exit $STATUS)." >&2
+  [ -f "$RES/compare.pdf" ] && echo "  $RES/compare.pdf is untouched, still the previous one." >&2
+  exit 4
+fi
+mv -f "$OUT" "$RES/compare.pdf"
 
 echo "saved -> $RES/compare.pdf  |  statistics: eval/aggregate.py results/$DS"

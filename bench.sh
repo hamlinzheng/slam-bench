@@ -60,7 +60,8 @@ aggregate — options (forwarded to eval/aggregate.py, which defines them):
 compare — options:
   [xyz|xy|xz|yz]        plot mode, default xyz
   ALL=true              overlay every run instead of each group's median
-  DISPLAY=              force headless (save the PDF, open no window)
+  PLOT=true             also open a live window; needs X11 reachable from the
+                        container (`xhost +local:root`). The PDF is always written
 EOF
 }
 
