@@ -86,10 +86,11 @@ def _completion_failure(rec, min_coverage):
     """Why this run is not a completed run, or None if it is.
 
     Beyond the exit code, completion means the trajectory actually came from the bag
-    this run played and covered it. Both checks exist because a run can
-    report bag_play_exit 0 and still be worthless: with network_mode host a surviving
-    container keeps the ROS master, and the recorder then captures a *different* run's
-    /Odometry — observed, and invisible to every other check.
+    this run played and covered it. Both checks exist because a run can report
+    bag_play_exit 0 and still be worthless: back when every container shared the host
+    network, a surviving one kept the ROS master and the recorder then captured a
+    *different* run's /Odometry — observed, and invisible to every other check. Runs are
+    network-isolated now, but the checks stay: they catch that shape of fault from any cause.
     """
     code = rec.get("bag_play_exit")
     if code is None:

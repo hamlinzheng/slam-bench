@@ -175,18 +175,19 @@ cmd_run() {
     done
   done
 
-  # Every service runs with network_mode: host, so a live ROS master on 11311 is shared.
-  # A second run's roscore then fails to bind and its nodes silently register with the
-  # existing master — both runs publish /Odometry into each other's recording and both
-  # trajectories are ruined, while each still reports bag_play_exit 0. Refuse to start.
-  if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/11311' 2>/dev/null; then
-    die "a ROS master is already listening on 11311 — another run is still alive, and this
-     one would join it (both trajectories would be contaminated). Stop it with:
-       docker rm -f \$(docker ps -q --filter ancestor=slam-bench:noetic)"
-  fi
+  # No host-side ROS master check here on purpose: the `run` service is network-isolated,
+  # so a host roscore can neither be joined by a run nor block one. run_system.sh's check
+  # remains, and now asks only about its own namespace.
+  #
+  # A concurrent run still warrants a warning, for a different reason than it used to: it
+  # no longer contaminates topics, it competes for CPU, memory bandwidth and RAM. Timing
+  # and resource numbers only compare across runs that had the machine on the same terms
+  # (why metrics.json records cpu_governor). Accuracy-only work is unaffected.
   local stale
   stale=$(docker ps --filter ancestor=slam-bench:noetic --format '{{.Names}}' 2>/dev/null)
-  [ -z "$stale" ] || echo "bench: warning — slam-bench containers already running: $(echo "$stale" | tr '\n' ' ')" >&2
+  [ -z "$stale" ] || echo "bench: warning — slam-bench containers already running, so this
+     batch does not have the machine to itself; its latency/CPU numbers are not comparable
+     with runs that did: $(echo "$stale" | tr '\n' ' ')" >&2
 
   local TOTAL=$((N * $(echo "$SYSTEMS" | wc -w) * $(echo "$PRESETS" | wc -w)))
   # RUN names one specific index, so it cannot address more than one run. Without this

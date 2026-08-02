@@ -3,10 +3,10 @@
 # repo mounts at /slam-bench, per-system build output at ./.ws (gitignored, persists
 # across runs), bags read-only from $BAGS_DIR.
 
+# `network_mode` is per-service, not in this anchor — it is the isolation boundary.
 x-common: &common
   image: slam-bench:noetic
   runtime: nvidia             # GPU/OpenGL passthrough so rviz can render (NVIDIA host)
-  network_mode: host          # single-host roscore; no ROS networking to configure
   init: true                  # tini as PID 1 — forwards signals; without it a run cannot be stopped
   user: "${HOST_UID:-0}:${HOST_GID:-0}"   # bench.sh sets these; unset falls back to root-owned output
   working_dir: /slam-bench
@@ -46,6 +46,10 @@ services:
   # compose from the HOST environment, for every service on every invocation.
   run:
     <<: *common
+    # No network at all: a run's ROS lives entirely in this container and `none` still
+    # gives it loopback, so neither the host's master nor another run can reach it.
+    # See README, "Each run is network-isolated", for what that buys and what it costs.
+    network_mode: none
     command: bash -c 'scripts/run_system.sh "$$SYS" "$$BAG"'
 
   compare:
@@ -59,6 +63,8 @@ services:
 
   dev:
     <<: *common
+    # Host network, unlike `run`: a by-hand shell onto the host's ROS graph. Not for runs.
+    network_mode: host
     stdin_open: true
     tty: true
     command: bash

@@ -92,14 +92,21 @@ DATASET=${NAME:-$BAGNAME}
 # if you are trading real-time fidelity for wall-clock on a smoke run.
 RATE=${RATE:-$BENCH_DEFAULT_RATE}
 
-# Refuse to join a master this run did not start. Every service uses network_mode: host,
-# so a surviving container keeps port 11311 bound; the roscore below would then fail to
-# bind while every node silently registers with the stale master, merging two runs'
-# /Odometry into both trajectories. Observed in practice.
+# All of this run's ROS lives in this container's netns (compose gives `run`
+# network_mode: none). Pin ROS to loopback: with no network the container hostname does not
+# resolve, and ROS defaults its own address to it, so roscore comes up unusable ("Unable to
+# communicate with master!"). Exported once — roslaunch and the recorders inherit it.
+export ROS_IP=127.0.0.1
+export ROS_MASTER_URI=http://127.0.0.1:11311
+
+# Refuse to join a master this run did not start. Isolation rules out the cross-container
+# case; what is left is a second run launched by hand in a container that already has one.
+# Joining would merge two systems' /Odometry into both trajectories, each still reporting
+# bag_play_exit 0 — observed, back when every service shared the host network.
 if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/11311' 2>/dev/null; then
-  echo "a ROS master is already listening on 127.0.0.1:11311 — another run is still alive." >&2
-  echo "this run would join it and both trajectories would be contaminated. Stop it first:" >&2
-  echo "  docker rm -f \$(docker ps -q --filter ancestor=slam-bench:noetic)" >&2
+  echo "a ROS master is already listening on 127.0.0.1:11311 in this container." >&2
+  echo "this run would join it and both trajectories would be contaminated." >&2
+  echo "start runs through ./bench.sh (one fresh, network-isolated container each)." >&2
   exit 7
 fi
 

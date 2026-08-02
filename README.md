@@ -94,16 +94,38 @@ path uses `SIGKILL`, which cannot be trapped, so the run leaves artefacts with n
 `metrics.json` — `aggregate` reports such a directory as `no metrics.json (run was killed)`
 instead of skipping it.
 
-**Only one run at a time on a host.** Every container uses `network_mode: host`, so they
-share one ROS master on port 11311. If a second run started while a first was alive, its
-`roscore` would fail to bind, its nodes would silently join the existing master, and both
-recorders would capture both systems' `/Odometry` — two ruined trajectories, each still
-reporting `bag_play_exit 0`. Both `bench.sh` and `run_system.sh` now refuse to start when
-11311 is already listening. If you ever need to clear a stuck run:
+**Each run is network-isolated.** The `run` service has `network_mode: none`: a run's
+`roscore`, the system under test, `rosbag play` and the three recorders all live in that one
+container's network namespace, and bags and results are mounts, so a run needs no network at
+all. Two consequences:
+
+- a ROS master on the host — any unrelated ROS application of yours — neither blocks a run
+  nor can be joined by one;
+- a surviving run can no longer capture a second one's `/Odometry`, the failure mode the old
+  host-network setup allowed (two ruined trajectories, both reporting `bag_play_exit 0`).
+
+The cost: **`rostopic echo` from the host can no longer watch a live run.** Go in through the
+container instead — which is also more precise, being that run's master by construction
+rather than whoever holds port 11311:
+
+```bash
+docker exec -it $(docker ps -q --filter ancestor=slam-bench:noetic) bash
+#   source /opt/ros/noetic/setup.bash && rostopic hz /Odometry
+```
+
+rviz (`RVIZ=true`) is unaffected — X11 travels over the `/tmp/.X11-unix` mount, not TCP. The
+`dev` shell keeps `network_mode: host` for poking at the host's ROS graph by hand; don't
+start a measurement run from inside it. If you need to clear a stuck run:
 
 ```bash
 docker rm -f $(docker ps -q --filter ancestor=slam-bench:noetic)
 ```
+
+**Still one run at a time, but now for a measurement reason rather than a plumbing one.**
+Concurrent runs no longer corrupt each other's topics; they compete for cores, memory
+bandwidth and RAM, and every latency/CPU number here is only comparable across runs that had
+the machine on the same terms — the same reason `metrics.json` records `cpu_governor`.
+`bench.sh` warns rather than refuses, since accuracy-only work is unaffected.
 
 Each run writes to `results/<NAME>/<SYS>/<PRESET>/run<NN>/` — repeated runs never overwrite
 each other:
