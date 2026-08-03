@@ -522,7 +522,16 @@ def _killed_record(run_dir):
 
 
 def _write_derived(metrics_path, derived):
-    """Merge `derived` into metrics.json, leaving every field run_system.sh wrote."""
+    """Merge `derived` into metrics.json, leaving every field run_system.sh wrote.
+
+    An empty derivation is never written. Aggregating while a batch is still running finds
+    trajectories with fewer than two poses, and persisting that emptiness replaced a
+    complete record with nothing — the run then read as failed until someone re-aggregated.
+    Since an empty result says only "could not derive", skipping the write can lose nothing
+    and overwriting can lose everything.
+    """
+    if not derived:
+        return
     on_disk = json.loads(metrics_path.read_text())
     on_disk["derived"] = derived
     metrics_path.write_text(json.dumps(on_disk, indent=2, sort_keys=True) + "\n")

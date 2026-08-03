@@ -412,6 +412,24 @@ def test_collect_writes_derived_quantities_back_into_metrics_json(tmp_path):
     assert json.loads((run / "metrics.json").read_text())["derived"]["path_len_m"] == 7.0
 
 
+def test_collect_does_not_overwrite_derived_when_nothing_can_be_derived(tmp_path):
+    """Aggregating while a batch is still running must not destroy an earlier result.
+
+    A run whose trajectory has not reached two poses yet derives nothing, and writing that
+    back replaced a complete record with an empty one — the run then read as failed until
+    someone re-aggregated. Observed: it marked a healthy 1818 m BIEVR-LIO run as having no
+    usable trajectory. An empty derivation carries no information, so it is never written.
+    """
+    make_dataset(tmp_path, {("fast_lio", "default"): ["run01"]})
+    run = tmp_path / "fast_lio" / "default" / "run01"
+    aggregate.collect(tmp_path)
+
+    write_tum(run / "trajectory.tum", [])  # as if the recorder had only just started
+    aggregate.collect(tmp_path)
+
+    assert json.loads((run / "metrics.json").read_text())["derived"]["path_len_m"] == 7.0
+
+
 def group_with(*derived_dicts, **kw):
     records = [rec(**kw) for _ in derived_dicts]
     for r, d in zip(records, derived_dicts):
