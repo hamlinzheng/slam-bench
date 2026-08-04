@@ -1,24 +1,79 @@
-# Bag registry. Fill after recording. Paths are container paths (bags mount
-# at /bags via BAGS_DIR). Only closed-loop bags support the start-end drift metric;
-# every bag supports map quality. roi_boxes feed the plane/thickness metrics.
+# Bag registry — the things about a dataset that only a human knows.
 #
-# bags:
-#   - id: BAG-01
-#     path: /bags/indoor_corridor_loop.bag
-#     scene: indoor_corridor
+# Ships empty. The real registry names sites, recording dates and route characteristics,
+# which is site information rather than harness configuration, so it is kept out of the
+# repository: fill `configs/bags.local.yaml` (gitignored) and leave this file as the
+# documented shape.
+#
+# Deliberately NOT a place for anything measurable. Whether a GNSS track is usable, how
+# noisy it is, where its holes are: all of that is measured per dataset into
+# results/<dataset>/gnss_ref.json by eval/gnss_ref.py, and a hand-written
+# `gnss_reliable: true` beside it would only ever go stale or lie. It would have lied on
+# this rig: the receiver keeps reporting SBAS-quality fixes after the vehicle drives into
+# a mine, so "has a fix stream" and "has a reference" are different facts — and only the
+# second is worth recording, by measuring it.
+#
+# There is deliberately no `drift_zero` field either, though a closed loop is rarely
+# exactly closed — a vehicle that parks 20 m from where it started makes a perfect system
+# read 20 m of end_pos rather than 0. A scalar cannot fix that: end_pos_m is a magnitude
+# and the closure is a vector, so subtracting one from the other gives only a lower bound
+# (|a-b| >= ||a|-||b||). Doing it properly means aligning the trajectory to a reference and
+# differencing vectors — which is what eval/gnss_ape.py already does, over every pose
+# rather than two of them. Where there is no reference, the closure is not measurable
+# anyway.
+#
+# What is left for this file is what no script can derive:
+#
+#   scene / shape       what the place and the route were
+#   closed_loop         whether the vehicle was driven back to where it started
+#   applicable          which accuracy metrics this bag can carry at all
+#   lidar               which sensor the systems were pointed at, when the rig has more
+#                       than one
+#   roi_boxes           shared volumes for the plane/thickness metrics (§6.2)
+#                       [{min: [x,y,z], max: [x,y,z]}, ...], identical across systems
+#
+# `path` is relative to the dataset root on the host, since BAGS_DIR mounts one dataset
+# at a time at /bags — a container path would only be valid during that dataset's own run.
+#
+# Nothing reads this file yet. The shape is settled first so that when something does, it
+# is filled from measurements already taken rather than from memory.
+#
+# Example entries:
+#
+#   - id: EXAMPLE_UNDERGROUND_LOOP
+#     path: SITE_A/20250101_120000
+#     scene: underground_drift
 #     shape: closed_loop
 #     closed_loop: true
 #     applicable: [drift, map]
-#     roi_boxes: []            # [{min: [x,y,z], max: [x,y,z]}, ...] shared across systems
-#     notes: degenerate corridor
+#     lidar: front
+#     roi_boxes: []
+#     notes: >
+#       Degenerate corridor. Runs here are non-deterministic — the same config and input
+#       can complete cleanly one run and diverge the next — so a single run is not
+#       evidence. GNSS is present but not a reference: the receiver keeps publishing
+#       underground and the track covers only the stretch near the portal.
 #
-#   - id: BAG-02
-#     path: /bags/outdoor_campus.bag
-#     scene: outdoor_campus
+#   - id: EXAMPLE_OUTDOOR_OPEN
+#     path: SITE_B/20250201_090000
+#     scene: outdoor_road
 #     shape: open
 #     closed_loop: false
-#     applicable: [map]
+#     applicable: [map, gnss_ape]     # no closure, so drift is not measurable here
+#     lidar: front                    # rear lidar and the cameras are in the bags, unused
 #     roi_boxes: []
-#     notes: ""
+#     notes: >
+#       Open route. With no closure the GNSS reference is the only check on whether a run
+#       diverged — M-DRIFT cannot see it and nothing else can either.
+#
+#   - id: EXAMPLE_UNEXAMINED
+#     path: SITE_A/20250301_080000
+#     scene: underground_drift
+#     shape: unexamined
+#     closed_loop: null               # null rather than assumed
+#     applicable: []
+#     lidar: front
+#     roi_boxes: []
+#     notes: Present on disk and unexamined.
 
 bags: []

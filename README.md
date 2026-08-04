@@ -15,7 +15,9 @@ scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
 eval/        record_tum.py (trajectory ①), sample_resource.py (resource ③),
              record_frames.py (frame timing ③), aggregate.py (N-run statistics),
-             compare.sh (evo overlay), tests/ (pytest)
+             compare.sh (evo overlay), init_dataset.py + gnss_ref.py (per-dataset
+             preparation), gnss_ape.py + plot_gnss.py (error against that reference),
+             tests/ (pytest)
 bridge/      CustomMsg→PointCloud2 uniform input (only needed once a PC2-only baseline lands)
 results/     per-run artifacts (gitignored)
 ```
@@ -26,6 +28,7 @@ the rule for where a file lives.
 ```
 ./bench.sh setup                 build the docker image
 ./bench.sh build                 compile the systems into .ws/
+./bench.sh init      <dataset>   prepare a dataset once (GNSS reference)
 ./bench.sh run                   N benchmark runs
 ./bench.sh aggregate <dataset>   N-run statistics -> stats.txt + stats.json
 ./bench.sh compare   <dataset>   evo trajectory overlay -> compare.pdf
@@ -145,7 +148,19 @@ each other:
 cat results/mydataset/fast_lio/default/run01/metrics.json
 ```
 
-Accuracy metrics (drift, MME, plane-RMSE) are the next stage.
+`./bench.sh init` writes two more, once per dataset rather than once per run:
+
+- `gnss_ref.tum` — the GNSS track in local ENU, the reference `evo_ape` and the plots use.
+  Its quaternion is a dummy: a single-antenna receiver has no attitude, so `evo_ape -r full`
+  against it would return a plausible but meaningless number
+- `gnss_ref.json` — what that reference is worth, all measured: fix mix, the gap
+  *distribution* (a 95 % fix rate whose missing 5 % is one continuous hole leaves that
+  stretch with no reference at all), and a per-axis noise floor taken while the vehicle was
+  stopped. It also carries `usable`, and when false, why — a receiver keeps publishing
+  underground, so "has a GNSS topic" and "has a reference" are different questions and only
+  the second one gates anything
+
+Map-quality metrics (MME, plane-RMSE) are the next stage.
 
 ## Aggregate results
 
@@ -159,6 +174,15 @@ Statistics over the repeated runs of a dataset:
 
 Writes `results/<DS>/stats.txt` (human) and `stats.json` (machine, the input to the
 cross-dataset summary matrix), and fills each run's `metrics.json` with its derived quantities.
+
+Start-end displacement is reported split as well as whole — `end_pos_m`, `end_horiz_m`,
+`end_vert_m`. The 3D scalar alone ranked runs wrongly on one outdoor dataset: a 7.4 km route
+with 14 m of relief, where the baselines end 22–48 m off vertically against 3–7 m
+horizontally, so the single number was almost entirely its vertical component and the
+vertical is free to wander out and back inside it. Where `./bench.sh init` found a usable
+GNSS reference, four more columns appear (`ape_horiz_m`, `ape_vert_m`, `end_err_h_m`,
+`end_err_v_m`); everywhere else they are blank, which is the honest reading rather than a
+zero.
 
 Per `(system, preset)` it reports **median [min–max]** plus every run's raw value. Mean and
 standard deviation are deliberately absent: the distribution is bimodal, so a mean lands in
@@ -231,8 +255,8 @@ holds:
 
 ```bash
 xhost +local:root                          # HOST, once: allow the live plot window
-./bench.sh compare mydataset               # 3D (xyz) overlay window + saved file
-./bench.sh compare mydataset xy            # top-down view instead
+./bench.sh compare mydataset               # plan (xy) overlay window + saved file
+./bench.sh compare mydataset xyz           # 3D view instead
 ALL=true  ./bench.sh compare mydataset     # every run, not just medians
 DISPLAY=  ./bench.sh compare mydataset     # headless (save only)
 ```
@@ -242,8 +266,20 @@ Writes `results/<DS>/compare.pdf`. By default each `(system, preset)` contribute
 the view for inspecting the bimodal split itself. Median selection reads the `derived` block,
 so run `aggregate` first — groups without it fall back to all runs with a warning.
 
-Drift is intentionally **not** reported — these datasets are not strictly closed-loop, so a
-start-end gap is not a valid drift measure.
+The default view is the plan one: these are ground-vehicle routes on near-flat ground, so a
+3D view spends most of its third axis on vertical error.
+
+Where `./bench.sh init` found a usable GNSS reference, `compare_gnss.pdf` is written too —
+the same runs against the GNSS track, in three pages: plan view, each axis against time, and
+per-axis error against time with the reference's own noise floor drawn as a band, since a
+separation smaller than that band is the receiver rather than the system. It is a separate
+file rather than more pages of `compare.pdf` because the two need opposite alignments and evo
+takes one per invocation: `compare.pdf` aligns origins, which removes each system's frame
+convention without fitting the shape, while a GNSS reference lives in ENU and differs from
+every system frame by a yaw only a Umeyama fit recovers. Attitude stays out of it — the
+reference has none, and `compare.pdf` already compares RPY without needing one.
+
+Drift is intentionally **not** reported here — `aggregate` owns every derived quantity.
 
 ## Interactive shell (debugging)
 

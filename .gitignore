@@ -8,6 +8,10 @@ results/*/
 # Bags are never committed
 bags/
 
+# The filled bag registry: site names, dates and route characteristics are site
+# information, not harness configuration. configs/bags.yaml ships as the documented shape.
+configs/bags.local.yaml
+
 # Python
 __pycache__/
 *.pyc

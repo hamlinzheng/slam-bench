@@ -5,6 +5,7 @@
 #   ./bench.sh setup                 build the docker image
 #   ./bench.sh build                 compile the systems into .ws/
 #   ./bench.sh run                   N benchmark runs (see the env table below)
+#   ./bench.sh init      <dataset>   prepare a dataset once (GNSS reference, ...)
 #   ./bench.sh aggregate <dataset>   N-run statistics -> stats.txt + stats.json
 #   ./bench.sh compare   <dataset>   evo trajectory overlay -> compare.pdf
 #   ./bench.sh shell                 interactive container
@@ -51,6 +52,14 @@ run — environment:
 
   ./bench.sh run --dry-run    print the plan without starting anything
 
+init — environment:
+  BAGS_DIR   required   the bags for THIS dataset; every one is scanned
+  Prepares a dataset once, before aggregate and compare. The only step that reads the
+  bags; both of the others use what it writes. Today one component: the GNSS reference
+  (results/<dataset>/gnss_ref.{tum,json}) from /sensing/gnss/fix, with a measured
+  statement of what it is worth. A dataset with no usable GNSS is not a failure — it
+  reports "no reference" and why, and everything downstream reads that.
+
 aggregate — options (forwarded to eval/aggregate.py, which defines them):
   --split-at <metres>   also bucket runs either side of this end_pos_m
                         (no default: the boundary is dataset-dependent)
@@ -58,10 +67,15 @@ aggregate — options (forwarded to eval/aggregate.py, which defines them):
                         completed (default 0.9)
 
 compare — options:
-  [xyz|xy|xz|yz]        plot mode, default xyz
+  [xy|xyz|xz|yz]        plot mode, default xy (the plan view)
   ALL=true              overlay every run instead of each group's median
   PLOT=true             also open a live window; needs X11 reachable from the
                         container (`xhost +local:root`). The PDF is always written
+  GNSS=true             build the reference here if `./bench.sh init` has not been
+                        run yet — needs BAGS_DIR. Not required otherwise: once the
+                        reference exists, compare_gnss.pdf is drawn by default. A
+                        dataset whose fix stream is not a reference says so, and
+                        compare.pdf is unaffected either way
 EOF
 }
 
@@ -129,13 +143,35 @@ cmd_aggregate() {
   DS="$ds" AGG_ARGS="${ARGS[*]:1}" compose_run -T ${PASS[@]+"${PASS[@]}"} aggregate
 }
 
+cmd_init() {
+  split_args "$@"
+  local ds=${ARGS[0]:-}
+  [ -n "$ds" ] || die "init needs a dataset name"
+  # The one command that does NOT require results/<dataset> to exist already. Preparing
+  # a dataset before anything has been run on it is the normal case — an open-loop bag
+  # has no closure to check against, so its GNSS reference is the only thing that will
+  # ever say whether a run diverged, and wanting that in place first is reasonable.
+  mkdir -p "$REPO/results/$ds"
+  # Its own step rather than a side effect of compare, because what it produces is
+  # consumed by more than one later step — aggregate computes APE from the reference,
+  # compare draws against it — and it is the only one that reads the bags. Hidden inside
+  # compare it also inverted the natural order: compare picks each group's median run
+  # from what aggregate wrote, so aggregate ran first, found no reference, and left the
+  # APE columns empty until a second pass.
+  #
+  # Exit 0 when every component was attempted, whatever each concluded: a dataset with
+  # no GNSS is a healthy dataset and reports "no reference" rather than failing. The
+  # verdicts live in the artifacts, not in the exit code.
+  DS="$ds" compose_run -T ${PASS[@]+"${PASS[@]}"} init
+}
+
 cmd_compare() {
   split_args "$@"
   local ds mode
   ds=$(dataset_arg compare) || exit 1
-  mode=${ARGS[1]:-xyz}
+  mode=${ARGS[1]:-xy}
   case "$mode" in xyz|xy|xz|yz) ;; *) die "compare: plot mode must be xyz|xy|xz|yz, got '$mode'" ;; esac
-  DS="$ds" MODE="$mode" compose_run -T ${PASS[@]+"${PASS[@]}"} compare
+  DS="$ds" MODE="$mode" GNSS="${GNSS:-false}" compose_run -T ${PASS[@]+"${PASS[@]}"} compare
 }
 
 cmd_shell() {
@@ -289,6 +325,7 @@ case "$cmd" in
   setup)            cmd_setup "$@" ;;
   build)            cmd_build "$@" ;;
   run)              cmd_run "$@" ;;
+  init)             cmd_init "$@" ;;
   aggregate|agg)    cmd_aggregate "$@" ;;
   compare)          cmd_compare "$@" ;;
   shell|dev)        cmd_shell "$@" ;;

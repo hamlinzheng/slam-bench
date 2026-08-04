@@ -20,13 +20,14 @@ x-common: &common
     - RATE
     - NAME
     - DS                      # dataset name — compare / aggregate
-    - MODE                    # evo plot mode (xyz default|xy|xz|yz)
+    - MODE                    # evo plot mode (xy default|xyz|xz|yz)
     - RVIZ                    # true → rviz during a run (needs X11)
     - PRESET                  # configuration variant (default: default)
     - RUN                     # explicit run index (default: next free)
     - FORCE                   # true → let RUN overwrite an existing run directory
     - AGG_ARGS                # aggregate: extra flags for aggregate.py
     - ALL                     # compare: overlay every run, not just medians
+    - GNSS                    # compare: also draw the GNSS-referenced overlay
     - PLOT                    # compare: true → also open a live window (X11 must reach the container)
     - OMP_WAIT_POLICY         # run_system.sh defaults it to `passive`; set `active` to override
   volumes:
@@ -53,9 +54,16 @@ services:
     network_mode: none
     command: bash -c 'scripts/run_system.sh "$$SYS" "$$BAG"'
 
+  # Prepares a dataset from its bags. Its own service because
+  # it is the only step here that reads /bags, and both aggregate and compare consume
+  # what it writes.
+  init:
+    <<: *common
+    command: bash -c 'python3 eval/init_dataset.py /bags --out results/$$DS'
+
   compare:
     <<: *common
-    command: bash -c 'eval/compare.sh "$$DS" "$${MODE:-xyz}"'
+    command: bash -c 'eval/compare.sh "$$DS" "$${MODE:-xy}"'
 
   aggregate:
     <<: *common

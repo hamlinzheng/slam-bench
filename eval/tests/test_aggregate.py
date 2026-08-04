@@ -38,6 +38,35 @@ def test_end_pos_is_measured_from_the_first_pose_not_the_origin(tmp_path):
     assert aggregate.trajectory_stats(tum)["end_pos_m"] == 5.0
 
 
+# (0,0,0) -> (3,4,12): horizontal leg 5, vertical leg 12, so the 3D displacement is 13.
+# Chosen so all three numbers are exact and no two of them coincide.
+SLOPED = [(0, 0, 0), (3, 4, 12)]
+
+
+def test_end_pos_splits_into_horizontal_and_vertical(tmp_path):
+    tum = write_tum(tmp_path / "trajectory.tum", SLOPED)
+    d = aggregate.trajectory_stats(tum)
+    assert d["end_pos_m"] == 13.0
+    assert d["end_pos_horiz_m"] == 5.0
+    assert d["end_pos_vert_m"] == 12.0
+
+
+def test_vertical_displacement_is_a_magnitude_not_a_signed_height(tmp_path):
+    # Descending must read the same as climbing: end_pos_m is a magnitude and its
+    # components have to compose back into it whichever way the run went.
+    tum = write_tum(tmp_path / "trajectory.tum", [(0, 0, 0), (3, 4, -12)])
+    d = aggregate.trajectory_stats(tum)
+    assert d["end_pos_vert_m"] == 12.0
+    assert d["end_pos_m"] == 13.0
+
+
+def test_flat_trajectory_puts_all_of_end_pos_in_the_horizontal_component(tmp_path):
+    tum = write_tum(tmp_path / "trajectory.tum", TRIANGLE)
+    d = aggregate.trajectory_stats(tum)
+    assert d["end_pos_horiz_m"] == 5.0
+    assert d["end_pos_vert_m"] == 0.0
+
+
 def test_empty_trajectory_is_rejected_rather_than_crashing(tmp_path):
     tum = write_tum(tmp_path / "trajectory.tum", [])
     with pytest.raises(aggregate.InsufficientTrajectory):

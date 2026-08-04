@@ -112,12 +112,45 @@ def _completion_failure(rec, min_coverage):
     return None
 
 
+def _gnss_ape(run_dir):
+    """Position error against the dataset's GNSS reference, when there is one.
+
+    The reference is per-dataset, not per-run: results/<dataset>/gnss_ref.tum, built by
+    eval/gnss_ref.py. Its report carries the verdict on whether the track is a reference
+    at all — a receiver keeps publishing underground, where the track covers 780 m of a
+    2849 m route, so the presence of the file is not the question and `usable` is.
+
+    Imported here rather than at module scope: gnss_ape needs numpy, and this module is
+    stdlib-only so its tests run on the host without a container. Absent numpy, or absent
+    a reference, the keys read null — never 0, which would claim a perfect run.
+    """
+    ds = Path(run_dir).parents[2]
+    ref = ds / "gnss_ref.tum"
+    if not ref.exists():
+        return {}
+    try:
+        report = json.loads((ds / "gnss_ref.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    if not report.get("usable"):
+        return {}
+    try:
+        from gnss_ape import NO_APE, ape
+    except ImportError:
+        return {}
+    try:
+        return {**NO_APE, **ape(ref, Path(run_dir) / "trajectory.tum")}
+    except (OSError, ValueError):
+        return dict(NO_APE)
+
+
 def _derive(run_dir, bag_start=None, bag_end=None):
     """Derived quantities, or {} when the trajectory cannot carry any."""
     try:
         derived = trajectory_stats(run_dir / "trajectory.tum")
     except (OSError, InsufficientTrajectory):
         return {}
+    derived.update(_gnss_ape(run_dir))
     csv = run_dir / "resource.csv"
     try:
         derived.update(resource_stats(csv))
@@ -201,6 +234,16 @@ def trajectory_stats(tum_path):
 
     The span is what lets the completion check compare this trajectory against the bag
     that was played — see `_completion`.
+
+    end_pos_m is reported split as well as whole, because on one outdoor dataset the
+    3D scalar turned out to be almost entirely its vertical component and ranked the
+    runs wrongly. Against a GNSS reference on that 7.4 km route — 14 m of true relief —
+    the four trajectories measured 22.5 / 48.4 / 2.0 / 40.0 m of vertical end-gap against
+    horizontal APE that agreed within 25% (rmse 3.4-6.1 m). One point_lio arm read
+    end_pos 10.6 m against another's 43.1 m purely because its vertical wander happened
+    to come back, while being the *less* accurate of the two horizontally. A single 3D
+    number mixes an axis every system is bad at, and can cancel inside it, with one they
+    all handle; kept for continuity, but read the components.
     """
     stamps, poses = _read_poses(tum_path)
     if len(poses) < 2:
@@ -210,9 +253,14 @@ def trajectory_stats(tum_path):
     path_len = 0.0
     for a, b in zip(poses, poses[1:]):
         path_len += _dist(a, b)
+    first, last = poses[0], poses[-1]
     return {
         "path_len_m": path_len,
-        "end_pos_m": _dist(poses[0], poses[-1]),
+        "end_pos_m": _dist(first, last),
+        # Magnitudes, not signed offsets, so the two compose back into end_pos_m
+        # regardless of which way the run drifted.
+        "end_pos_horiz_m": _dist(first[:2], last[:2]),
+        "end_pos_vert_m": abs(last[2] - first[2]),
         "traj_start": stamps[0],
         "traj_end": stamps[-1],
         # One pose per processed scan, so this is the frame count cpu_ms_per_frame
@@ -596,6 +644,15 @@ def group_runs(records):
 ACCURACY_COLUMNS = (
     ("path_len_m", "path_len_m", 1),
     ("end_pos_m", "end_pos_m", 1),
+    ("end_pos_horiz_m", "end_horiz_m", 1),
+    ("end_pos_vert_m", "end_vert_m", 1),
+    # Blank on every dataset without a usable GNSS reference, which is most of them —
+    # and that blank is the honest reading: an open route has no closure, so without a
+    # reference there is no accuracy number to be had at all.
+    ("gnss_ape_horiz_rmse_m", "ape_horiz_m", 2),
+    ("gnss_ape_vert_rmse_m", "ape_vert_m", 2),
+    ("gnss_end_err_horiz_m", "end_err_h_m", 2),
+    ("gnss_end_err_vert_m", "end_err_v_m", 2),
 )
 PERF_COLUMNS = (
     ("lat_p50_ms", "lat_p50ms", 1),

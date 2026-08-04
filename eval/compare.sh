@@ -10,12 +10,21 @@
 # Produces results/<dataset>/compare.pdf (also shown live if a display exists).
 #
 # Usage (inside the container): eval/compare.sh <dataset> [plot_mode]
-#   plot_mode: xyz (default, 3D) | xy | xz | yz
+#   plot_mode: xy (default, plan view) | xyz | xz | yz
+#              These are ground-vehicle routes on near-flat ground — one outdoor route
+#              rises 14 m over 7.3 km — so the plan view is where the trajectory is
+#              read, and a 3D view spends most of its third axis on vertical error.
 #   ALL=true   overlay every run instead of each group's median run
 #   PLOT=true  also open a live window (needs X11 reachable from the container)
+#   GNSS=true  additionally draw compare_gnss.pdf — the same runs against the GNSS
+#              track. A separate file, not another page: it needs Umeyama alignment
+#              where compare.pdf deliberately uses --align_origin, and evo takes one
+#              per invocation. Requires the bags mounted (they are, at /bags) and a
+#              usable GNSS fix stream; on a dataset without one it says so and the
+#              main plot is unaffected.
 set -uo pipefail
-DS=${1:?usage: compare.sh <dataset> [xyz|xy|xz|yz]}
-MODE=${2:-xyz}
+DS=${1:?usage: compare.sh <dataset> [xy|xyz|xz|yz]}
+MODE=${2:-xy}
 RES=/slam-bench/results/$DS
 [ -d "$RES" ] || { echo "no results dir: $RES" >&2; exit 1; }
 
@@ -114,3 +123,53 @@ fi
 mv -f "$OUT" "$RES/compare.pdf"
 
 echo "saved -> $RES/compare.pdf  |  statistics: eval/aggregate.py results/$DS"
+
+# ------------------------------------------------------------------ GNSS ----
+# Non-fatal throughout: a missing or unusable fix stream must not cost the main plot,
+# which was already written above.
+#
+# GNSS=true is only needed the first time. Building the reference scans every bag (24 GB
+# on one dataset here) and needs BAGS_DIR pointed at it, neither of which should be a
+# silent precondition of `compare`. Once it is built it is cached beside the results and
+# costs nothing, so from then on it is drawn by default.
+REF=$RES/gnss_ref.tum
+if [ ! -s "$REF" ]; then
+  [ "${GNSS:-false}" = "true" ] || exit 0
+  python3 /slam-bench/eval/gnss_ref.py /bags --out "$RES"
+fi
+
+# The verdict is read from the report rather than from that exit code, so a cached
+# reference is checked too. gnss_ref.py writes the report even when the answer is no —
+# a dataset whose receiver kept emitting fixes underground still deserves the record of
+# why its track is not a reference.
+VERDICT=$(python3 - "$RES/gnss_ref.json" <<'PY'
+import json, sys
+try:
+    r = json.loads(open(sys.argv[1]).read())
+except (OSError, ValueError) as e:
+    print("no reference report ({})".format(e))
+else:
+    print("" if r.get("usable") else "; ".join(r.get("unusable_because") or ["unusable"]))
+PY
+)
+if [ -n "$VERDICT" ]; then
+  echo "compare: GNSS track is not a reference for $DS — $VERDICT" >&2
+  echo "  compare.pdf is unaffected; see $RES/gnss_ref.json" >&2
+  exit 0
+fi
+
+# Same label=path pairs the overlay used, so the two figures name the same curves.
+GARGS=()
+for pick in "${PICKS[@]}"; do
+  GARGS+=("${pick%%$'\t'*}=${pick#*$'\t'}")
+done
+
+GOUT=$TMP/compare_gnss.pdf
+if python3 /slam-bench/eval/plot_gnss.py \
+     --ref "$REF" --report "$RES/gnss_ref.json" --out "$GOUT" "${GARGS[@]}" \
+   && [ -s "$GOUT" ]; then
+  mv -f "$GOUT" "$RES/compare_gnss.pdf"
+  echo "saved -> $RES/compare_gnss.pdf  |  reference quality: $RES/gnss_ref.json"
+else
+  echo "compare: GNSS overlay not written; $RES/compare.pdf is unaffected." >&2
+fi
