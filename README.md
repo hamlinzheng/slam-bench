@@ -15,7 +15,7 @@ scripts/     container-side: build_systems.sh, run_system.sh (one run), lib.sh (
 configs/     per-system MID-360 overrides + launch + presets/ (variants) + systems.yaml + bags.yaml
 eval/        record_tum.py (trajectory ①), sample_resource.py (resource ③),
              record_frames.py (frame timing ③), aggregate.py (N-run statistics),
-             compare.sh (evo overlay), init_dataset.py + gnss_ref.py (per-dataset
+             compare.py (evo overlay), init_dataset.py + gnss_ref.py (per-dataset
              preparation), gnss_ape.py + plot_gnss.py (error against that reference),
              tests/ (pytest)
 bridge/      CustomMsg→PointCloud2 uniform input (only needed once a PC2-only baseline lands)

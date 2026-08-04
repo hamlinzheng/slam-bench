@@ -63,7 +63,7 @@ services:
 
   compare:
     <<: *common
-    command: bash -c 'eval/compare.sh "$$DS" "$${MODE:-xy}"'
+    command: bash -c 'python3 eval/compare.py "$$DS" "$${MODE:-xy}"'
 
   aggregate:
     <<: *common

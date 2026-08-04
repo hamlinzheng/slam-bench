@@ -1,8 +1,10 @@
 """The system registry — the only reader of configs/systems.yaml.
 
 Named registry.py, not systems.py: the repo root holds a vendored `systems/` directory,
-which Python 3 sees as a namespace package, and eval/compare.sh runs its python with the
-repo root at sys.path[0].
+which Python 3 sees as a namespace package. The constraint that forced the name has since
+gone — compare.py puts eval/ on sys.path[0] itself, where the heredoc it replaced could
+not — so this could be renamed; it has not been, to keep one rename out of a diff that is
+about something else.
 
 A system is stopped out of the benchmark by a `disabled:` key whose value is the reason:
 

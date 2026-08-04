@@ -157,7 +157,7 @@ def _apply_evo_style(plt):
     linewidth 1.5, sans-serif. The palette is the part that matters — a system drawn blue
     in one figure and orange in the other makes the pair unreadable side by side.
 
-    One difference is not fixable here: compare.sh must hand evo a trajectory as `--ref`
+    One difference is not fixable here: compare.py must hand evo a trajectory as `--ref`
     for `--align_origin` and evo draws references in black, so compare.pdf's first system
     is black while every system is coloured here, and the palette runs one position apart.
     """
