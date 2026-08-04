@@ -52,6 +52,9 @@ run — environment:
 
   ./bench.sh run --dry-run    print the plan without starting anything
 
+  A system carrying `disabled: <reason>` in configs/systems.yaml still runs when SYS
+  names it, with a warning, but aggregate and compare leave it out.
+
 init — environment:
   BAGS_DIR   required   the bags for THIS dataset; every one is scanned
   Prepares a dataset once, before aggregate and compare. The only step that reads the

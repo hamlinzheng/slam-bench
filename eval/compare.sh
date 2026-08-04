@@ -36,13 +36,32 @@ mapfile -t PICKS < <(ALL=${ALL:-false} python3 - "$RES" <<'PY'
 import json, os, statistics, sys
 from pathlib import Path
 
+# This script arrives on stdin, so eval/ is not on sys.path (see eval/registry.py for
+# why the module is not called systems.py).
+sys.path.insert(0, "/slam-bench/eval")
+import aggregate, registry
+
 res = Path(sys.argv[1])
 show_all = os.environ.get("ALL", "false").lower() == "true"
+
+# aggregate owns the results-tree semantics here as everywhere, so the two steps cannot
+# end up reporting different counts for the same omission.
+disabled = registry.disabled_systems_or_warn("compare")
+for system, reason, runs in aggregate.disabled_inventory(res, disabled):
+    print(
+        "compare: skipped {} (disabled: {}) — {} run(s) not drawn".format(
+            system, reason, runs
+        ),
+        file=sys.stderr,
+    )
 
 groups = {}
 for tum in sorted(res.glob("*/*/run*/trajectory.tum")):
     run = tum.parent
-    groups.setdefault((run.parent.parent.name, run.parent.name), []).append(run)
+    system = run.parent.parent.name
+    if system in disabled:
+        continue
+    groups.setdefault((system, run.parent.name), []).append(run)
 
 for (system, preset), runs in sorted(groups.items()):
     chosen = runs
@@ -68,7 +87,11 @@ for (system, preset), runs in sorted(groups.items()):
         print("{}-{}-{}\t{}".format(system, preset, run.name, run / "trajectory.tum"))
 PY
 )
-[ "${#PICKS[@]}" -gt 0 ] || { echo "no */*/run*/trajectory.tum under $RES" >&2; exit 2; }
+[ "${#PICKS[@]}" -gt 0 ] || {
+  echo "no */*/run*/trajectory.tum to draw under $RES" >&2
+  echo "  (a 'skipped' line above means the runs exist but their system is disabled)" >&2
+  exit 2
+}
 
 # Stage each trajectory as <label>.tum so evo's legend shows system-preset-run
 # (evo labels a trajectory by its file stem — the raw files are all trajectory.tum).

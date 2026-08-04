@@ -57,6 +57,22 @@ case "$SYS" in
   *) echo "unknown system: $SYS" >&2; exit 2 ;;
 esac
 
+# Warn, don't block: naming a system in SYS is deliberate, and the switch only decides
+# what the default comparison contains. Checked here rather than in bench.sh's pre-flight
+# so the registry is parsed in one language only — bench.sh needs nothing but bash and
+# docker today; the cost is that `run --dry-run` does not show this line.
+REASON=$(python3 "$REPO/eval/registry.py" disabled-reason "$SYS"); RC=$?
+case $RC in
+  0) echo "run_system: warning — $SYS is disabled in configs/systems.yaml" >&2
+     echo "  reason: $REASON" >&2
+     echo "  running anyway, because SYS named it explicitly. This run lands in results/" >&2
+     echo "  as usual, but aggregate and compare leave it out until that line is deleted." >&2 ;;
+  1) ;;   # not disabled
+     # Anything else means the check itself failed. Said out loud, because a bare `if`
+     # here would read an unreadable registry as a clean bill of health.
+  *) echo "run_system: warning — could not check whether $SYS is disabled (exit $RC)" >&2 ;;
+esac
+
 if [ ! -f "$WS/devel/setup.bash" ]; then
   echo "workspace $WS not built — run 'docker compose run --rm build' first" >&2
   exit 3

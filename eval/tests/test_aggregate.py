@@ -3,6 +3,7 @@ import json
 import pytest
 
 import aggregate
+import registry
 
 
 def write_tum(path, points):
@@ -578,7 +579,23 @@ def test_rendered_table_annotates_a_group_that_has_no_spread():
     assert "no spread" in render([rec()])
 
 
-def test_main_writes_both_stats_files(tmp_path):
+@pytest.fixture
+def disabled(monkeypatch):
+    """Set which systems main() sees as disabled, without touching configs/systems.yaml.
+
+    Every test that reaches main() uses it, including the ones about something else:
+    unpatched they would read the repository's real registry, and disabling a system
+    there would break tests that have nothing to do with the switch.
+    """
+
+    def use(mapping):
+        monkeypatch.setattr(registry, "disabled_systems", lambda _p=None: dict(mapping))
+
+    use({})
+    return use
+
+
+def test_main_writes_both_stats_files(tmp_path, disabled):
     make_dataset(tmp_path, {("fast_lio", "default"): ["run01", "run02"]})
 
     assert aggregate.main([str(tmp_path)]) == 0
@@ -586,3 +603,91 @@ def test_main_writes_both_stats_files(tmp_path):
     assert "fast_lio" in (tmp_path / "stats.txt").read_text()
     payload = json.loads((tmp_path / "stats.json").read_text())
     assert payload["groups"][0]["metrics"]["end_pos_m"]["n"] == 2
+
+
+def test_collect_leaves_out_the_systems_it_is_told_to_skip(tmp_path):
+    make_dataset(
+        tmp_path,
+        {
+            ("fast_lio", "default"): ["run01", "run02"],
+            ("bievr_lio", "default"): ["run01"],
+        },
+    )
+    records = aggregate.collect(tmp_path, skip_systems={"bievr_lio"})
+    assert {r["system"] for r in records} == {"fast_lio"}
+
+
+def test_inventory_counts_the_runs_a_skip_would_drop_across_every_preset(tmp_path):
+    make_dataset(
+        tmp_path,
+        {
+            ("fast_lio", "default"): ["run01"],
+            ("bievr_lio", "default"): ["run01", "run02"],
+            ("bievr_lio", "ivox1"): ["run01"],
+        },
+    )
+    assert aggregate.disabled_inventory(tmp_path, {"bievr_lio": "unusable"}) == [
+        ("bievr_lio", "unusable", 3)
+    ]
+
+
+def test_inventory_says_nothing_about_a_system_this_dataset_never_ran(tmp_path):
+    make_dataset(tmp_path, {("fast_lio", "default"): ["run01"]})
+    assert aggregate.disabled_inventory(tmp_path, {"bievr_lio": "unusable"}) == []
+
+
+def test_main_reports_what_it_dropped_instead_of_dropping_it_quietly(
+    tmp_path, capsys, disabled
+):
+    make_dataset(
+        tmp_path,
+        {
+            ("fast_lio", "default"): ["run01"],
+            ("bievr_lio", "default"): ["run01", "run02"],
+        },
+    )
+    disabled({"bievr_lio": "diverges past the first open stretch"})
+
+    assert aggregate.main([str(tmp_path)]) == 0
+
+    err = capsys.readouterr().err
+    assert "skipped bievr_lio" in err and "2 run(s)" in err
+    text = (tmp_path / "stats.txt").read_text()
+    assert "diverges past the first open stretch" in text
+    assert "bievr_lio-default" not in text
+    payload = json.loads((tmp_path / "stats.json").read_text())
+    assert payload["disabled"] == [
+        {
+            "system": "bievr_lio",
+            "reason": "diverges past the first open stretch",
+            "runs": 2,
+        }
+    ]
+
+
+def test_main_distinguishes_all_disabled_from_an_empty_dataset(
+    tmp_path, capsys, disabled
+):
+    make_dataset(tmp_path, {("bievr_lio", "default"): ["run01"]})
+    disabled({"bievr_lio": "unusable"})
+
+    assert aggregate.main([str(tmp_path)]) == 1
+
+    assert "belongs to a disabled system" in capsys.readouterr().err
+
+
+def test_main_draws_everything_when_the_registry_cannot_be_read(
+    tmp_path, capsys, monkeypatch
+):
+    # The safe direction is showing too much: a registry that fails to parse must not
+    # subtract systems from the tables on the strength of a guess.
+    def boom(_path=None):
+        raise registry.RegistryError("cannot read it")
+
+    monkeypatch.setattr(registry, "disabled_systems", boom)
+    make_dataset(tmp_path, {("fast_lio", "default"): ["run01"]})
+
+    assert aggregate.main([str(tmp_path)]) == 0
+
+    assert "treating every system as enabled" in capsys.readouterr().err
+    assert "fast_lio" in (tmp_path / "stats.txt").read_text()

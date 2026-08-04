@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Aggregate N repeated runs of a dataset into per-(system, preset) statistics.
 
-Standard library only, by design: the tests then run on the host with plain
-pytest — no container, no ROS, no bag.
+Every derived quantity is computed from plain arguments — no container, no ROS, no bag —
+so the tests run on the host under plain pytest. Only main() reads anything about the
+world: which systems are disabled, via eval/registry.py. collect, disabled_inventory and
+render_text take that answer as an argument and never consult the registry themselves.
 """
 import argparse
 import json
@@ -10,6 +12,8 @@ import math
 import statistics
 import sys
 from pathlib import Path
+
+import registry
 
 NO_RESOURCE = {
     "cpu_mean": None,
@@ -520,15 +524,21 @@ def _lag_growth(values):
     return statistics.median_low(values[-k:]) - statistics.median_low(values[:k])
 
 
-def collect(dataset_dir, min_coverage=DEFAULT_MIN_COVERAGE):
+def collect(dataset_dir, min_coverage=DEFAULT_MIN_COVERAGE, skip_systems=()):
     """Load every run under results/<dataset>/<system>/<preset>/run<NN>/.
 
     Derived quantities are written back into each run's metrics.json so that no other
     consumer has to recompute them — this module is their only implementation.
+
+    skip_systems names systems to leave out entirely (see disabled_inventory, which
+    counts what this drops so the omission is reported rather than merely happening).
     """
+    skip_systems = set(skip_systems)
     records = []
     for run_dir in sorted(Path(dataset_dir).glob("*/*/run*")):
         if not run_dir.is_dir():
+            continue
+        if run_dir.parent.parent.name in skip_systems:
             continue
         metrics = run_dir / "metrics.json"
         if not metrics.exists():
@@ -549,6 +559,21 @@ def collect(dataset_dir, min_coverage=DEFAULT_MIN_COVERAGE):
         _write_derived(metrics, rec["derived"])
         records.append(rec)
     return records
+
+
+def disabled_inventory(dataset_dir, disabled):
+    """What collect() will drop for `disabled`, as [(system, reason, runs)].
+
+    A separate pass so collect() never opens a disabled run at all — a system disabled
+    for being broken would otherwise still warn about it once per run. Only systems with
+    runs present appear; a dataset that never ran one has nothing to report.
+    """
+    found = {}
+    for run_dir in sorted(Path(dataset_dir).glob("*/*/run*")):
+        if run_dir.is_dir() and run_dir.parent.parent.name in disabled:
+            system = run_dir.parent.parent.name
+            found[system] = found.get(system, 0) + 1
+    return [(system, disabled[system], runs) for system, runs in sorted(found.items())]
 
 
 def _killed_record(run_dir):
@@ -775,12 +800,18 @@ def _dist(a, b):
     return math.sqrt(sum((p - q) ** 2 for p, q in zip(a, b)))
 
 
-def render_text(dataset, stats):
+def render_text(dataset, stats, disabled=()):
     """The human-readable tables. stats.json carries the same content verbatim."""
     labels = _labels(stats)
     width = max([len(l) for l in labels] + [10])
 
     out = ["# {} — N-run repeatability: median [min–max]".format(dataset), ""]
+    # Under the title rather than in a footnote: a system missing from the tables without
+    # a word here reads as one that was never run, not one that was set aside.
+    if disabled:
+        out += ["## disabled — present in results/, left out of everything below", ""]
+        out += ["{}  ({} run(s)) — {}".format(s, n, r) for s, r, n in disabled]
+        out += ["", "Delete its `disabled:` line in configs/systems.yaml to bring it back.", ""]
     out += ["## accuracy", ""] + _metric_table(labels, stats, ACCURACY_COLUMNS)
     out += ["", "## real-time", ""] + _metric_table(labels, stats, PERF_COLUMNS)
     out += [""] + list(PERF_LEGEND)
@@ -993,17 +1024,45 @@ def main(argv=None):
     a = p.parse_args(argv)
 
     dataset_dir = Path(a.dataset_dir)
-    records = collect(dataset_dir, min_coverage=a.min_coverage)
+
+    disabled = registry.disabled_systems_or_warn("aggregate")
+    inventory = disabled_inventory(dataset_dir, disabled)
+    for system, reason, runs in inventory:
+        print(
+            "aggregate: skipped {} (disabled: {}) — {} run(s)".format(
+                system, reason, runs
+            ),
+            file=sys.stderr,
+        )
+
+    records = collect(dataset_dir, min_coverage=a.min_coverage, skip_systems=disabled)
     if not records:
-        print("aggregate: no runs under {}".format(dataset_dir), file=sys.stderr)
+        # Distinct from an empty dataset: the fix is one line in configs/systems.yaml.
+        what = (
+            "every run under {} belongs to a disabled system"
+            if inventory
+            else "no runs under {}"
+        )
+        print("aggregate: " + what.format(dataset_dir), file=sys.stderr)
         return 1
 
     stats = [group_stats(g, split_at=a.split_at) for g in group_runs(records)]
-    text = render_text(dataset_dir.name, stats)
+    text = render_text(dataset_dir.name, stats, disabled=inventory)
 
     (dataset_dir / "stats.txt").write_text(text)
     (dataset_dir / "stats.json").write_text(
-        json.dumps({"dataset": dataset_dir.name, "groups": stats}, indent=2) + "\n"
+        json.dumps(
+            {
+                "dataset": dataset_dir.name,
+                "groups": stats,
+                # So a reader of stats.json alone can tell "set aside" from "never run".
+                "disabled": [
+                    {"system": s, "reason": r, "runs": n} for s, r, n in inventory
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
     )
     print(text, end="")
     print(

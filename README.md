@@ -73,6 +73,27 @@ BAGS_DIR=/path/to/bags NAME=mydataset SYS=fast_lio RVIZ=true ./bench.sh run
 ./bench.sh run --dry-run                 # print the plan without running anything
 ```
 
+### Taking a system out of the comparison
+
+Give it a `disabled:` line in `configs/systems.yaml`, whose value is the reason:
+
+```yaml
+bievr_lio:
+  disabled: diverges past the first long open stretch; the numbers are not comparable
+  group: A
+  ...
+```
+
+`aggregate` and `compare` then leave its runs out, each naming the system, the reason and
+how many runs it dropped — the omission is reported, never silent. `run` still runs it
+when `SYS` names it, with a warning: the switch decides what the default comparison
+contains, not what you are allowed to do. So a run made while a system is disabled lands
+in `results/` as usual but stays out of both eval steps until the line is gone.
+
+Nothing is rebuilt either way, so bringing a system back is deleting that one line. There
+is deliberately no flag to override the switch per invocation: `configs/systems.yaml` is
+meant to be the only place that says whether a system counts.
+
 | Var | Meaning |
 |---|---|
 | `BAGS_DIR` | **required** — host bag folder, mounted read-only at `/bags` |
@@ -330,8 +351,9 @@ numbers since rendering competes with the system under test.
 
 ## Tests
 
-`eval/aggregate.py` and `eval/next_run_dir.py` use the Python standard library only, so their
-tests run on the host with no container, ROS, or bag:
+`eval/aggregate.py` and `eval/next_run_dir.py` compute everything from plain arguments, so their
+tests run on the host with no container, ROS, or bag — `pyyaml` (for `eval/registry.py`) is the
+only dependency beyond the standard library:
 
 ```bash
 python3 -m pytest eval/tests/ -q

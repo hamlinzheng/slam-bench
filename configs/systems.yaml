@@ -2,10 +2,16 @@
 # Everything downstream (drift, map, resource metrics) reads the normalized artifacts
 # and does not know which system produced them. scripts/run_system.sh currently mirrors
 # the odom_topic / process fields here in a case statement; keep the two in sync (a
-# future run_system reads this file directly).
+# future run_system reads this file directly — `disabled` below is the first field that
+# already does, the rest are still mirrored).
 #
 # registered_cloud is not consumed yet (map artifact ② accumulation is a later stage);
 # verify the exact topic name on first run before relying on it.
+#
+# `disabled: <reason>` — the one field here that IS read, by eval/registry.py: aggregate
+# and compare then drop that system's runs and report the reason, while run warns and
+# runs anyway. See eval/registry.py for why the reason is the value rather than a
+# comment, and README, "Taking a system out of the comparison", for the full effect.
 
 fast_lio:
   group: A                       # pure LIO odometry (no loop closure / backend)
