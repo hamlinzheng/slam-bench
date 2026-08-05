@@ -324,6 +324,8 @@ xhost +local:root                          # HOST, once: allow the live plot win
 ./bench.sh compare mydataset               # plan (xy) overlay window + saved file
 ./bench.sh compare mydataset xyz           # 3D view instead
 ALL=true  ./bench.sh compare mydataset     # every run, not just medians
+REF=super_lio ./bench.sh compare mydataset # draw in another system's frame instead
+ALIGN=origin  ./bench.sh compare mydataset # pin to the reference's opening pose instead
 DISPLAY=  ./bench.sh compare mydataset     # headless (save only)
 ```
 
@@ -343,11 +345,15 @@ still — that figure aligns with a whole-trajectory Umeyama fit, which a runawa
 drag, taking every other curve's error with it.
 
 Every curve carries a filled circle where it starts and a `×` where it ends, on both
-figures. All six start at the same point here — `--align_origin` puts them there — so
-direction is the only thing separating them, and a truncated run stops in open ground where
-it otherwise reads as an unattached start rather than a run cut short. It is an evo setting
-rather than a flag, so `compare` writes it into a throwaway config under a temporary `HOME`;
-your own `~/.evo` is left alone.
+figures. Neither end is guessable otherwise: a truncated run stops in open ground, where
+without the mark it reads as an unattached start rather than a run cut short. It is an evo
+setting rather than a flag, so `compare` writes it into a throwaway config under a temporary
+`HOME`; your own `~/.evo` is left alone.
+
+Under the default alignment the starts do **not** coincide — a whole-trajectory fit is free
+to place each curve where its shape fits best, so how far a start sits from the others is
+itself a reading of how badly that run is shaped. Under `ALIGN=origin` they all coincide by
+construction, and direction is the only thing separating the curves.
 
 `compare_gnss.pdf` draws the plan view **twice**, under the two alignments it already
 maintained for its other pages, because they answer different questions:
@@ -363,6 +369,57 @@ maintained for its other pages, because they answer different questions:
 A run truncated where it blew up can be too short to contain that opening travel — one
 survives 32.6 s, before the vehicle has covered 100 m. It is left off the opening-aligned
 pages only, and named on them, rather than withholding those pages from every other system.
+
+**`REF` picks whose frame the figure is drawn in**, defaulting to `point_lio`. Every system
+defines its world frame differently and evo aligns the whole overlay onto the first
+trajectory's opening pose, so this one choice orients the entire plan view.
+
+It has to be a system that **gravity-aligns**, or the plan view is not a plan view. Measured
+against the GNSS reference — the angle between each system's own vertical and the true one,
+on the two datasets where every system behaves:
+
+| | `point_lio` | `bievr_lio` | `super_lio` | `fast_lio` | `faster_lio` | `pv_lio` |
+|---|---|---|---|---|---|---|
+| tilt from vertical | **1.9–3.3°** | 1.6–2.1° | 2.0–2.4° | **14.1–16.0°** | 13.2–24.2° | 14.9–16.3° |
+| its vertical vs ENU up | +0.998 | +0.999 | +0.999 | **−0.961** | — | — |
+
+The sign matters as much as the angle: `fast_lio`'s vertical points *down*, so aligning on
+it draws the whole route upside down.
+
+Reproducibility is the second axis and the softer one. Between two runs of one bag the
+opening attitude moves by 0.37° (`fast_lio`), 0.79°, 1.24°, 2.12°, 10.43° (`point_lio`) and
+25.99° (`bievr_lio`). For a gravity-aligned system nearly all of that is yaw — 10.20° of
+`point_lio`'s 10.43° — which turns the figure without deforming it, unlike a tilt, which
+projects vertical motion into the plan view. So `point_lio`'s wobble costs an angle and
+`fast_lio`'s steadiness costs the shape.
+
+This used to be whichever system sorted first by name — `bievr_lio`, gravity-aligned but the
+loosest of the six in yaw, so anything that changed which run represented a group silently
+turned the figure by up to 22.7°. Only the opening pose is read, so a system that later blew
+up is still a valid frame; `REF=` (empty) restores the old first-drawn-run behaviour.
+
+**`ALIGN` chooses how**, and the default `umeyama` fits each curve onto the reference by
+position alone. `ALIGN=origin` instead pins every curve to the reference's opening pose,
+attitude included, and lets the disagreement accumulate from there.
+
+Position-only is the default because a benchmark has to be able to draw a system it did not
+write, and attitude conventions are not universal. One system here publishes its orientation
+rolled 180° about forward — its body y and z read 179.9° and 166.3° from every other
+system's, i.e. FRD where ROS REP-103 says FLU. Its *positions* are the closest of any system
+to the reference (0.26 m RMS over the opening kilometre); only the attitude disagrees. Under
+`origin`, which aligns on attitude, that curve is drawn flipped and reads as **1598 m** of
+error. Under `umeyama` the same run reads **5.0 m**.
+
+The cost is that fitting the shape flatters everything. On one dataset, RMS distance to the
+reference under `origin` → `umeyama`: `pv_lio` 7.6 → 1.5 m, `fast_lio` 16.6 → 9.3,
+`bievr_lio` 42.7 → 27.1, `super_lio` 203.7 → 132.9. Every system reads 1.5–5× closer than it
+is from a common start, because a least-squares fit spreads each run's drift across both
+ends — and the thing being fitted onto here is another system under test, not a truth.
+
+**So do not read drift off this figure.** Read it under `ALIGN=origin`, where it accumulates
+from a common start, or against the GNSS track in `compare_gnss.pdf`, which is the only
+alignment in this repo with a truth behind it — and which is unaffected by all of the above,
+since `plot_gnss.py` never reads a quaternion.
 
 The default view is the plan one: these are ground-vehicle routes on near-flat ground, so a
 3D view spends most of its third axis on vertical error.

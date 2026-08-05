@@ -72,6 +72,17 @@ aggregate — options (forwarded to eval/aggregate.py, which defines them):
 compare — options:
   [xy|xyz|xz|yz]        plot mode, default xy (the plan view)
   ALL=true              overlay every run instead of each group's median
+  REF=<system>          whose frame the overlay is drawn in, default point_lio. It
+                        must gravity-align or the plan view is not a plan view:
+                        fast_lio's own vertical is 14-16 deg off true and points
+                        down, so aligning on it draws the route upside down.
+                        REF= (empty) keeps whichever run is drawn first
+  ALIGN=origin          pin every curve to the reference's opening pose, attitude
+                        included, instead of the default position-only fit. The more
+                        honest reading of drift — 35-80% larger, because a least-squares
+                        fit spreads each run's error across both ends — but it breaks on
+                        a system that publishes orientation in another convention, which
+                        is why it is not the default. Default `umeyama`
   PLOT=true             also open a live window; needs X11 reachable from the
                         container (`xhost +local:root`). The PDF is always written
   GNSS=true             build the reference here if `./bench.sh init` has not been
@@ -174,7 +185,8 @@ cmd_compare() {
   ds=$(dataset_arg compare) || exit 1
   mode=${ARGS[1]:-xy}
   case "$mode" in xyz|xy|xz|yz) ;; *) die "compare: plot mode must be xyz|xy|xz|yz, got '$mode'" ;; esac
-  DS="$ds" MODE="$mode" GNSS="${GNSS:-false}" compose_run -T ${PASS[@]+"${PASS[@]}"} compare
+  DS="$ds" MODE="$mode" GNSS="${GNSS:-false}" REF="${REF-point_lio}" ALIGN="${ALIGN:-umeyama}" \
+    compose_run -T ${PASS[@]+"${PASS[@]}"} compare
 }
 
 cmd_shell() {

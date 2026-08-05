@@ -84,7 +84,9 @@ def test_presets_of_one_system_are_separate_groups(tmp_path):
 def test_the_first_trajectory_becomes_the_reference_to_align_the_rest_to(tmp_path):
     argv = compare.evo_argv([tmp_path / "a.tum", tmp_path / "b.tum"], "xy",
                             tmp_path / "o.pdf", plot=False)
-    assert "--align_origin" in argv
+    # Which alignment flag it is belongs to the ALIGN tests; what matters here is that
+    # there is one, and that it has something to align to.
+    assert "--align_origin" in argv or "-a" in argv
     assert argv[argv.index("--ref") + 1].endswith("a.tum")
     # The reference is not also passed positionally, or evo draws it twice.
     assert sum(a.endswith("a.tum") for a in argv) == 1
@@ -251,3 +253,103 @@ def test_a_config_failure_costs_the_markers_and_nothing_else(tmp_path, monkeypat
     monkeypatch.setattr(compare, "_run", lambda argv, **kw: 1)
     compare._start_end_markers({}, tmp_path)
     assert "without them" in capsys.readouterr().err
+
+
+# --- the alignment reference -------------------------------------------------------
+
+
+def picks_of(*labels):
+    return [compare.Pick(l, "/{}.tum".format(l), None) for l in labels]
+
+
+def test_the_named_system_leads_and_so_becomes_evos_reference():
+    picks = picks_of("bievr_lio-default-run01", "fast_lio-default-run02",
+                     "point_lio-default-run01")
+    out = compare.reference_first(picks, "fast_lio")
+    assert out[0].label == "fast_lio-default-run02"
+    # Everything else keeps its order — only the reference moves.
+    assert [p.label for p in out[1:]] == ["bievr_lio-default-run01",
+                                          "point_lio-default-run01"]
+
+
+def test_a_prefix_of_another_system_name_is_not_a_match():
+    # `fast_lio` must not claim `faster_lio`'s curve; the separator is part of the test.
+    picks = picks_of("faster_lio-default-run01", "point_lio-default-run01")
+    out = compare.reference_first(picks, "fast_lio")
+    assert out[0].label == "faster_lio-default-run01"   # unchanged: no fast_lio here
+
+
+def test_an_absent_reference_system_says_so_rather_than_aligning_silently(capsys):
+    picks = picks_of("bievr_lio-default-run01", "point_lio-default-run01")
+    out = compare.reference_first(picks, "fast_lio")
+    assert [p.label for p in out] == [p.label for p in picks]
+    err = capsys.readouterr().err
+    assert "no fast_lio" in err and "bievr_lio-default-run01" in err
+
+
+def test_an_empty_reference_keeps_the_order_it_was_given():
+    picks = picks_of("bievr_lio-default-run01", "fast_lio-default-run01")
+    assert compare.reference_first(picks, "") == picks
+
+
+def test_a_truncated_reference_is_used_but_flagged(capsys):
+    # Only the opening pose is read, so the frame is sound — but evo draws the reference
+    # in black, and a black curve stopping early invites a wrong reading.
+    picks = [compare.Pick("fast_lio-default-run01-FAILED-968s", "/a.tum", 967.6),
+             compare.Pick("point_lio-default-run01", "/b.tum", None)]
+    out = compare.reference_first(picks, "fast_lio")
+    assert out[0].label.startswith("fast_lio")
+    assert "ends where it blew up" in capsys.readouterr().err
+
+
+def test_the_default_alignment_reads_positions_only(tmp_path):
+    # Position-only by default: a benchmark has to be able to draw a system it did not
+    # write, and one here publishes its attitude in a convention of its own.
+    argv = compare.evo_argv([tmp_path / "a.tum", tmp_path / "b.tum"], "xy",
+                            tmp_path / "o.pdf", plot=False)
+    assert "-a" in argv and "--align_origin" not in argv
+
+
+def test_origin_alignment_is_opt_in(tmp_path):
+    argv = compare.evo_argv([tmp_path / "a.tum", tmp_path / "b.tum"], "xy",
+                            tmp_path / "o.pdf", plot=False, align="origin")
+    assert "--align_origin" in argv and "-a" not in argv
+
+
+def test_scale_is_never_corrected(tmp_path):
+    # LiDAR range and IMU acceleration are both metric, so a LIO trajectory's scale is
+    # observable; fitting it would hide a real error.
+    for align in ("origin", "umeyama"):
+        argv = compare.evo_argv([tmp_path / "a.tum", tmp_path / "b.tum"], "xy",
+                                tmp_path / "o.pdf", plot=False, align=align)
+        assert "-s" not in argv and "--correct_scale" not in argv
+
+
+def test_a_lone_trajectory_is_aligned_to_nothing_either_way(tmp_path):
+    for align in ("origin", "umeyama"):
+        argv = compare.evo_argv([tmp_path / "a.tum"], "xy", tmp_path / "o.pdf",
+                                plot=False, align=align)
+        assert "-a" not in argv and "--align_origin" not in argv
+
+
+def test_align_defaults_to_umeyama_when_unset(monkeypatch):
+    monkeypatch.delenv("ALIGN", raising=False)
+    assert compare._align_mode() == "umeyama"
+
+
+def test_align_is_case_and_whitespace_insensitive():
+    assert compare._align_mode("  Umeyama \n") == "umeyama"
+
+
+def test_an_empty_align_is_the_default_not_an_error(capsys):
+    assert compare._align_mode("") == "umeyama"
+    assert capsys.readouterr().err == ""
+
+
+def test_a_misspelled_align_is_named_rather_than_silently_ignored(capsys):
+    # The two modes differ by 35-80% in how much disagreement they show and neither writes
+    # its name on the figure, so a typo that falls through to the default is a wrong answer
+    # with no trace.
+    assert compare._align_mode("umeyema") == "umeyama"
+    err = capsys.readouterr().err
+    assert "umeyema" in err and "umeyama" in err

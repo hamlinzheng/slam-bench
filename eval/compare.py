@@ -16,6 +16,14 @@ Usage (inside the container): python3 eval/compare.py <dataset> [plot_mode]
              rises 14 m over 7.3 km — so the plan view is where the trajectory is read,
              and a 3D view spends most of its third axis on vertical error.
   ALL=true   overlay every run instead of each group's median run
+  REF=<system>  whose frame to draw in (default point_lio, which gravity-aligns, so its
+             xy plane is the horizontal one). Empty keeps the first run drawn.
+  ALIGN=umeyama (default) | origin
+             umeyama fits each curve onto the reference by position alone, which is the
+             only alignment that works for a system publishing its attitude in another
+             convention. origin instead pins every curve to the reference's opening pose,
+             attitude included, and lets the disagreement accumulate from there — the
+             more honest reading of drift, and 35-80% larger for it.
   PLOT=true  also open a live window (needs X11 reachable from the container)
   GNSS=true  build the GNSS reference here if `./bench.sh init` has not been run yet;
              needs the bags. Not required once it exists — the reference is cached
@@ -61,6 +69,51 @@ EXIT_EVO_WROTE_NOTHING = 4
 # otherwise the second at which divergence.py's rule fired — which is where the curve is
 # truncated before evo ever sees it.
 Pick = collections.namedtuple("Pick", "label path diverged_at_s")
+
+# Whose frame the whole figure is drawn in. evo aligns every trajectory onto the first
+# one's opening pose, so this choice sets the orientation of the entire plan view.
+#
+# It has to be a *gravity-aligned* system, which is the property that decides whether the
+# figure is a plan view at all. Measured against the GNSS reference — the angle between a
+# system's own z and true vertical, on the two datasets where every system behaves:
+#
+#     point_lio 1.9-3.3    bievr_lio 1.6-2.1    super_lio 2.0-2.4
+#     fast_lio  14.1-16.0  faster_lio 13.2-24.2  pv_lio    14.9-16.3
+#
+# and the sign matters as much as the angle: fast_lio's vertical reads -0.961 against ENU
+# up, so aligning on it draws the whole route upside down. The three on the top row are
+# +0.998 or better.
+#
+# Reproducibility is the second axis, and a softer one. Between two runs of one bag the
+# opening attitude moves by: fast_lio 0.37 deg, faster_lio 0.79, pv_lio 1.24, super_lio
+# 2.12, point_lio 10.43, bievr_lio 25.99. For a gravity-aligned system almost all of that
+# is yaw (point_lio: 10.20 of its 10.43), which rotates the figure without deforming it —
+# unlike a tilt, which projects vertical motion into the plan view. So point_lio's wobble
+# costs an angle and fast_lio's steadiness costs the shape.
+#
+# bievr_lio is what this used to pick, by nothing better than sorting the system names and
+# taking the first: gravity-aligned, but the loosest of the six in yaw, and two runs of one
+# ELDORADO bag put the whole overlay 22.7 deg apart.
+#
+# Only the opening pose is read, so a system that later blew up is still a valid frame.
+DEFAULT_REF_SYSTEM = "point_lio"
+
+
+# Position-only, by default. `origin` pins each curve to the reference's opening pose,
+# attitude included — which is the more honest reading of drift, and which any system
+# publishing its orientation in another convention breaks outright: one here is FRD where
+# ROS REP-103 says FLU, so `origin` rotates its (best-fitting) trajectory by 180 deg about
+# forward and draws 1598 m of error where there is 5 m. A benchmark has to be able to draw
+# a system it did not write, and only the position fit works for every one of them.
+#
+# The cost, measured on OPENROAD_20260323 as RMS distance to the reference under
+# origin -> umeyama: pv_lio 7.6 -> 1.5 m, fast_lio 16.6 -> 9.3, bievr_lio 42.7 -> 27.1,
+# super_lio 203.7 -> 132.9. A least-squares fit spreads each run's drift across both ends,
+# so every system reads 1.5-5x closer to the reference than it does from a common start —
+# and the reference here is another system under test, not a truth. Read drift under
+# ALIGN=origin, or against the GNSS track in compare_gnss.pdf, which has one.
+ALIGN_MODES = ("umeyama", "origin")
+DEFAULT_ALIGN = ALIGN_MODES[0]
 
 
 def pick_runs(res, show_all, disabled):
@@ -125,6 +178,30 @@ def pick_runs(res, show_all, disabled):
     return picks
 
 
+def reference_first(picks, system):
+    """`picks` reordered so `system` leads it, which makes it evo's `--ref`.
+
+    Falls back to the order it was given, with a warning, when that system is not among
+    the trajectories being drawn — disabled, never run, or filtered out. Silently drawing
+    in somebody else's frame would be the worse outcome: the figure would still look
+    right, and only a rotation of the whole plan view would say otherwise.
+    """
+    if not system:
+        return picks
+    lead = [p for p in picks if p.label.startswith(system + "-")]
+    if not lead:
+        warn("compare: no {} among the drawn runs — aligning on {} instead".format(
+            system, picks[0].label if picks else "nothing"))
+        return picks
+    if lead[0].diverged_at_s is not None:
+        # Its opening pose is still what the alignment reads, so the frame is sound. But
+        # evo draws the reference in black, and a black curve that stops early is worth a
+        # word before someone reads it as the whole route.
+        warn("compare: aligning on {}, which is drawn truncated — the reference curve "
+             "ends where it blew up".format(lead[0].label))
+    return lead[:1] + [p for p in picks if p is not lead[0]]
+
+
 def _derived(run):
     """One run's `derived` block, or {} when it has none yet."""
     try:
@@ -167,7 +244,7 @@ def reference_verdict(report_path):
     return "; ".join(report.get("unusable_because") or ["unusable"])
 
 
-def evo_argv(tums, mode, out, plot):
+def evo_argv(tums, mode, out, plot, align=DEFAULT_ALIGN):
     """The evo_traj command line for these trajectories.
 
     Each system defines its world frame differently — FAST-LIO and faster-lio use the
@@ -179,17 +256,42 @@ def evo_argv(tums, mode, out, plot):
     nothing to align to, so it gets neither flag.
     """
     argv = ["evo_traj", "tum"]
-    align = []
+    ref = []
     if len(tums) > 1:
-        align = ["--ref", str(tums[0])]
+        ref = ["--ref", str(tums[0])]
         tums = tums[1:]
-    argv += [str(t) for t in tums] + align
-    if align:
-        argv.append("--align_origin")
+    argv += [str(t) for t in tums] + ref
+    if ref:
+        # `-a` is a whole-trajectory Umeyama fit of each curve onto the reference. It
+        # reads positions only, so it is immune to a system publishing its attitude in
+        # another convention — but it also fits the shape, and on a figure with no ground
+        # truth "fit each system onto another system" is least-squares agreement, which
+        # hides exactly the disagreement the overlay exists to show. Never with `-s`:
+        # LiDAR range and IMU acceleration are metric, so scale is observable and
+        # correcting it would hide a real error.
+        argv.append("--align_origin" if align == "origin" else "-a")
     argv += ["--plot_mode", mode, "--save_plot", str(out)]
     if plot:
         argv.append("--plot")
     return argv
+
+
+
+def _align_mode(value=None):
+    """ALIGN, checked. An unrecognised value is named, not quietly taken as the default.
+
+    The two modes differ by 35-80% in how much disagreement they show, and neither writes
+    its name on the figure — so `ALIGN=umeyema` falling through to the default would be a
+    typo that changes the answer and leaves no trace of having done so.
+    """
+    if value is None:
+        value = os.environ.get("ALIGN", DEFAULT_ALIGN)
+    value = value.strip().lower() or DEFAULT_ALIGN
+    if value not in ALIGN_MODES:
+        warn("compare: ALIGN={} is not one of {} — using {}".format(
+            value, "/".join(ALIGN_MODES), DEFAULT_ALIGN))
+        return DEFAULT_ALIGN
+    return value
 
 
 def warn(*msg):
@@ -220,6 +322,8 @@ def main(argv=None):
         )
 
     picks = pick_runs(res, os.environ.get("ALL", "false").lower() == "true", disabled)
+    # REF= (empty) keeps whatever order pick_runs produced, i.e. the pre-REF behaviour.
+    picks = reference_first(picks, os.environ.get("REF", DEFAULT_REF_SYSTEM).strip())
     if not picks:
         warn("no */*/run*/trajectory.tum to draw under {}".format(res))
         warn("  (a 'skipped' line above means the runs exist but their system is disabled)")
@@ -266,7 +370,8 @@ def main(argv=None):
         if not plot:
             env["MPLBACKEND"] = "Agg"
         _start_end_markers(env, tmp)
-        status = _run(evo_argv(tums, args.mode, out, plot), env=env)
+        status = _run(
+            evo_argv(tums, args.mode, out, plot, align=_align_mode()), env=env)
 
         # Both conditions: evo can exit 0 having drawn nothing.
         if status != 0 or not (out.exists() and out.stat().st_size):
