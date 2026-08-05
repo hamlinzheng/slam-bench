@@ -317,6 +317,27 @@ holds:
 | trajectory spans < `--min-coverage` of the bag (default `0.9`) | a run that stopped early |
 | a `VOID` file in the run directory | a human verdict; its first line is the reason |
 
+## Cross-dataset summary
+
+```bash
+./bench.sh summary          # every dataset's stats.json -> results/SUMMARY.md
+```
+
+One Markdown document over every dataset that has been aggregated: a completion matrix, the
+accuracy and real-time metrics as system × dataset tables, then each dataset's full tables
+with their `[min–max]` ranges. Needs no bags and no rebuild — it reads only what `aggregate`
+already wrote, so no number in it can disagree with a `stats.txt`.
+
+**Nothing is averaged across datasets.** The routes run from 1.8 km of underground drift to
+7.3 km of open road; a figure spanning them describes no route that was driven. Every cell
+stays attached to the dataset it came from.
+
+Three things a cell can say instead of a number, because they are three different facts:
+`–` the system was never run there, **fail** it ran and no run survived, `n/m` the quantity
+was never measured. The document also carries a section naming what
+[§10 of the plan](docs/comparison_plan.md) asks for that no collector produces yet — map
+metrics, ARM latency — rather than leaving those columns blank.
+
 ## Compare trajectories
 
 ```bash

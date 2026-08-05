@@ -8,6 +8,7 @@
 #   ./bench.sh init      <dataset>   prepare a dataset once (GNSS reference, ...)
 #   ./bench.sh aggregate <dataset>   N-run statistics -> stats.txt + stats.json
 #   ./bench.sh compare   <dataset>   evo trajectory overlay -> compare.pdf
+#   ./bench.sh summary               every dataset's stats.json -> results/SUMMARY.md
 #   ./bench.sh shell                 interactive container
 #
 # Anything after `--` is passed straight to `docker compose`, so a flag this wrapper
@@ -189,6 +190,13 @@ cmd_compare() {
     compose_run -T ${PASS[@]+"${PASS[@]}"} compare
 }
 
+cmd_summary() {
+  split_args "$@"
+  # No dataset argument: this one is about all of them at once, and it reads only what
+  # aggregate already wrote — so it needs no bags, no GNSS reference and no rebuild.
+  compose_run -T ${PASS[@]+"${PASS[@]}"} summary
+}
+
 cmd_shell() {
   split_args "$@"
   # No -T here: this one is interactive by definition.
@@ -343,6 +351,7 @@ case "$cmd" in
   init)             cmd_init "$@" ;;
   aggregate|agg)    cmd_aggregate "$@" ;;
   compare)          cmd_compare "$@" ;;
+  summary)          cmd_summary "$@" ;;
   shell|dev)        cmd_shell "$@" ;;
   help|-h|--help)   usage ;;
   *) echo "bench: unknown command '$cmd'" >&2; echo >&2; usage >&2; exit 1 ;;

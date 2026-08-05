@@ -67,6 +67,11 @@ services:
     <<: *common
     command: bash -c 'python3 eval/compare.py "$$DS" "$${MODE:-xy}"'
 
+  # No DS: this one is about every dataset at once, and reads only what aggregate wrote.
+  summary:
+    <<: *common
+    command: bash -c 'python3 eval/summary.py /slam-bench/results'
+
   aggregate:
     <<: *common
     # Flags forwarded verbatim, so aggregate.py's argparse is the only place to declare one.

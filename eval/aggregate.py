@@ -918,7 +918,7 @@ def render_text(dataset, stats, disabled=()):
         for label, e in excluded:
             out.append(
                 "{:<{w}}  {:<7} {}".format(
-                    label, _displayed(e["status"]).upper(), _excluded_reason(e),
+                    label, displayed_status(e["status"]).upper(), excluded_reason(e),
                     w=width,
                 )
             )
@@ -1050,14 +1050,14 @@ DISPLAY_STATUS = {"diverged": "failed"}
 DISPLAY_ORDER = ("void", "failed")
 
 
-def _displayed(status):
+def displayed_status(status):
     return DISPLAY_STATUS.get(status, status)
 
 
-def _excluded_reason(entry):
+def excluded_reason(entry):
     """The reason as the tables show it, naming the failure mode the count dropped."""
     reason = entry["reason"] or entry["run_dir"] or ""
-    if _displayed(entry["status"]) != entry["status"]:
+    if displayed_status(entry["status"]) != entry["status"]:
         return "{}: {}".format(entry["status"], reason)
     return reason
 
@@ -1065,7 +1065,7 @@ def _excluded_reason(entry):
 def _n_cell(s):
     notes = []
     for status in DISPLAY_ORDER:
-        count = sum(1 for e in s["excluded"] if _displayed(e["status"]) == status)
+        count = sum(1 for e in s["excluded"] if displayed_status(e["status"]) == status)
         if count:
             notes.append("{} {}".format(count, status))
     if s["no_spread"]:
