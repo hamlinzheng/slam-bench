@@ -691,3 +691,124 @@ def test_main_draws_everything_when_the_registry_cannot_be_read(
 
     assert "treating every system as enabled" in capsys.readouterr().err
     assert "fast_lio" in (tmp_path / "stats.txt").read_text()
+
+
+# --- divergence -------------------------------------------------------------------
+#
+# write_tum stamps poses at 10 Hz, so a 1 m step is 10 m/s and a 10 m step is 100 m/s —
+# either side of divergence.DEFAULT_MAX_SPEED_MPS with room to spare. (TRIANGLE's own
+# longest step is 4 m, i.e. exactly 40 m/s, which is at the limit and so not over it.
+# Every test above depends on that, which is why nothing there reads as diverged.)
+WALK = [(i * 1.0, 0, 0) for i in range(21)]
+BLOW_UP = WALK + [(20.0 + i * 10.0, 0, 0) for i in range(1, 41)]
+
+
+def test_a_blown_up_trajectory_is_diverged_not_ok(tmp_path):
+    rec = aggregate.load_run(make_run(tmp_path, poses=BLOW_UP))
+    assert rec["status"] == "diverged"
+    assert "m/s" in rec["fail_reason"]
+
+
+def test_a_plausible_trajectory_is_not_diverged(tmp_path):
+    rec = aggregate.load_run(make_run(tmp_path, poses=WALK))
+    assert rec["status"] == "ok"
+    assert rec["derived"]["diverged_at_s"] is None
+
+
+def test_the_fastest_step_is_derived_for_every_run(tmp_path):
+    rec = aggregate.load_run(make_run(tmp_path, poses=WALK))
+    assert rec["derived"]["v_max_mps"] == pytest.approx(10.0)
+
+
+def test_divergence_outranks_an_incomplete_trajectory(tmp_path):
+    # The ordering that matters: a run the online detector aborted has low coverage *by
+    # construction*, so judging completion first would report the consequence ("coverage
+    # N% of the bag") and bury the cause.
+    run = make_run(tmp_path, poses=BLOW_UP, metrics={"bag_play_exit": 130})
+    rec = aggregate.load_run(run)
+    assert rec["status"] == "diverged"
+    # The completion failure is still recorded, but after the cause rather than instead
+    # of it: SIGINT here is the abort, not an independent fault.
+    assert rec["fail_reason"].index("m/s") < rec["fail_reason"].index("exited 130")
+
+
+def test_a_void_verdict_outranks_divergence(tmp_path):
+    # A human looked at it and said why; that answer wins over every automatic check.
+    run = make_run(tmp_path, poses=BLOW_UP)
+    (run / "VOID").write_text("wrong bag played\n")
+    rec = aggregate.load_run(run)
+    assert rec["status"] == "void"
+    assert rec["void_reason"] == "wrong bag played"
+
+
+def test_the_marker_says_the_run_was_aborted_rather_than_played_out(tmp_path):
+    # Scan and marker agree that it diverged; only the marker explains the missing route.
+    run = make_run(tmp_path, poses=BLOW_UP)
+    (run / "DIVERGED").write_text("60% of a 2s window over 40 m/s at 2.1s\n")
+    rec = aggregate.load_run(run)
+    assert rec["status"] == "diverged"
+    assert rec["fail_reason"].startswith("aborted mid-run:")
+
+
+def test_an_empty_marker_still_names_the_run_aborted(tmp_path):
+    run = make_run(tmp_path, poses=WALK)
+    (run / "DIVERGED").write_text("")
+    assert aggregate.load_run(run)["status"] == "diverged"
+
+
+def test_diverged_runs_are_excluded_from_the_group_sample(tmp_path):
+    healthy = aggregate.load_run(make_run(tmp_path, name="run01", poses=WALK))
+    blown = aggregate.load_run(make_run(tmp_path, name="run02", poses=BLOW_UP))
+    group = aggregate.group_runs([healthy, blown])[0]
+    assert [r["run_dir"] for r in group["runs"]] == [healthy["run_dir"]]
+    assert [r["run_dir"] for r in group["excluded"]] == [blown["run_dir"]]
+
+
+def test_the_n_column_reports_a_diverged_run_as_failed(tmp_path):
+    # The tables mark a cell that carries no result with one word, as comparison tables in
+    # this field do. Which way it failed is a sentence, and lives in the reason.
+    healthy = aggregate.load_run(make_run(tmp_path, name="run01", poses=WALK))
+    blown = aggregate.load_run(make_run(tmp_path, name="run02", poses=BLOW_UP))
+    stats = aggregate.group_stats(aggregate.group_runs([healthy, blown])[0])
+    assert aggregate._n_cell(stats) == "1 (1 failed, no spread)"
+
+
+def test_the_record_keeps_diverged_even_though_the_table_says_failed(tmp_path):
+    # stats.json is machine-readable and the distinction is real: an OOM kill is fixed
+    # with more memory and a blow-up is not. Anything downstream must still be able to
+    # tell them apart.
+    blown = aggregate.load_run(make_run(tmp_path, name="run02", poses=BLOW_UP))
+    stats = aggregate.group_stats(aggregate.group_runs([blown])[0])
+    assert stats["excluded"][0]["status"] == "diverged"
+
+
+def test_the_excluded_line_names_the_failure_mode_the_count_dropped(tmp_path):
+    blown = aggregate.load_run(make_run(tmp_path, name="run02", poses=BLOW_UP))
+    stats = [aggregate.group_stats(aggregate.group_runs([blown])[0])]
+    line = next(
+        l for l in aggregate.render_text("ds", stats).splitlines() if "FAILED" in l
+    )
+    assert "diverged:" in line
+    assert "DIVERGED" not in line
+
+
+def test_an_empty_void_marker_does_not_crash_the_dataset(tmp_path):
+    # `touch VOID` is a reasonable thing to do in a hurry. The marker's existence is the
+    # signal; its content is the courtesy.
+    run = make_run(tmp_path, poses=WALK)
+    (run / "VOID").write_text("")
+    rec = aggregate.load_run(run)
+    assert rec["status"] == "void"
+    assert rec["void_reason"] == ""
+
+
+def test_a_diverged_run_that_is_also_incomplete_reports_both(tmp_path):
+    # PV-LIO on ELDORADO: OOM-killed on all three runs, and the trajectory blew up as it
+    # died. Divergence wins the status, but the out-of-memory failure is the more
+    # actionable fact and must not be retired by that.
+    run = make_run(tmp_path, poses=BLOW_UP, metrics={"bag_play_exit": 137})
+    rec = aggregate.load_run(run)
+    assert rec["status"] == "diverged"
+    assert "m/s" in rec["fail_reason"]
+    assert "also incomplete" in rec["fail_reason"]
+    assert "exited 137" in rec["fail_reason"]

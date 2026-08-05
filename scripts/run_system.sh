@@ -154,6 +154,9 @@ else
           ${RUN:+--run "$RUN"} ${FORCE:+--force}) || exit 6
 fi
 mkdir -p "$OUT"
+# FORCE=true re-runs into an existing directory, which must not inherit the previous
+# attempt's verdict — the watcher below would stop playback before a pose was recorded.
+rm -f "$OUT/DIVERGED"
 RUN_INDEX=$(basename "$OUT"); RUN_INDEX=${RUN_INDEX#run}; RUN_INDEX=${RUN_INDEX#0}
 echo "system=$SYS preset=$PRESET bags=${#BAGS[@]} rate=${RATE}x out=$OUT"
 
@@ -178,7 +181,17 @@ write_metrics() {
   rm -f "$BOUNDS_FILE"
 
   TRAJ_LINES=$(wc -l < "$OUT/trajectory.tum" 2>/dev/null || echo 0)
-  if [ "$PLAY_EXIT" = "0" ] && [ "$SYS_ALIVE" = "true" ] && [ "$TRAJ_LINES" -ge 2 ]; then
+  # Divergence outranks the rest: an aborted run failed its playback *because* we stopped
+  # it, so "failed" here would report the consequence and lose the cause. aggregate.py
+  # orders its own checks the same way, and for the same reason.
+  DIVERGED_REASON=""; DIVERGED=false
+  if [ -s "$OUT/DIVERGED" ]; then
+    DIVERGED_REASON=$(head -n 1 "$OUT/DIVERGED")
+  fi
+  if [ -e "$OUT/DIVERGED" ]; then
+    DIVERGED=true
+    STATUS=diverged
+  elif [ "$PLAY_EXIT" = "0" ] && [ "$SYS_ALIVE" = "true" ] && [ "$TRAJ_LINES" -ge 2 ]; then
     STATUS=ok
   else
     STATUS=failed
@@ -191,6 +204,7 @@ write_metrics() {
   M_OMP_WAIT_POLICY=$OMP_WAIT_POLICY M_SYS_ALIVE=$SYS_ALIVE \
   M_CPU_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true) \
   M_WALL_S=$((SECONDS - START_S)) M_PLAY_EXIT=$PLAY_EXIT M_POSES=$TRAJ_LINES \
+  M_DIVERGED=$DIVERGED M_DIVERGED_REASON=$DIVERGED_REASON \
   M_BAG_START=$BAG_START M_BAG_END=$BAG_END \
   M_PRESET_SHA=$(cat "$LAUNCH" "${CFGS[@]}" | sha256sum | cut -d' ' -f1) \
   M_PRESET_FILES=$(IFS=:; echo "${REL[*]}") \
@@ -235,6 +249,15 @@ record = {
     "bag_play_exit": num("M_PLAY_EXIT", int),
     "system_alive": flag("M_SYS_ALIVE"),   # false = died before playback ended
     "traj_poses": num("M_POSES", int),
+    # Present only when the online detector fired, and it records the *abort*, not the
+    # verdict: aggregate.py re-derives divergence from the trajectory either way. What it
+    # adds is `aborted`, the only thing that explains why such a run covers so little of
+    # its bag — because playback was stopped, not because the system stalled.
+    "diverged": (
+        {"reason": text("M_DIVERGED_REASON"), "aborted": True}
+        if flag("M_DIVERGED")
+        else None
+    ),
     "bag_start": num("M_BAG_START"),
     "bag_end": num("M_BAG_END"),
     "preset_sha": text("M_PRESET_SHA"),
@@ -251,9 +274,13 @@ with open(sys.argv[1], "w") as fh:
     fh.write("\n")
 PY
   echo "done -> $OUT  (status=$STATUS, poses=$TRAJ_LINES, play_exit=${PLAY_EXIT:-none})"
+  if [ "$DIVERGED" = "true" ]; then
+    echo "  diverged: ${DIVERGED_REASON:-detector fired}"
+  fi
 }
 
 cleanup() {
+  kill "${WATCH_PID:-}" 2>/dev/null || true
   kill -INT "${PLAY_PID:-}" 2>/dev/null || true
   kill -INT "${REC_PID:-}" "${SAMP_PID:-}" "${FRAMES_PID:-}" 2>/dev/null || true
   rm -f "${FRAMES_READY:-}" 2>/dev/null || true
@@ -326,7 +353,8 @@ wait_for 120 "$SYS to subscribe to $BENCH_LIDAR_TOPIC (see $OUT/run.log)" \
 # asks whether $BENCH_LIDAR_TOPIC has a subscriber, and record_frames.py subscribes to it
 # too — started any earlier it would hold the gate open on the system under test's behalf
 # and playback would begin before the system was listening.
-python3 "$REPO/eval/record_tum.py"      --topic "$ODOM" --out "$OUT/trajectory.tum" & REC_PID=$!
+python3 "$REPO/eval/record_tum.py"      --topic "$ODOM" --out "$OUT/trajectory.tum" \
+  --diverged-file "$OUT/DIVERGED" & REC_PID=$!
 python3 "$REPO/eval/sample_resource.py" --proc "$PROC"  --out "$OUT/resource.csv"   & SAMP_PID=$!
 FRAMES_READY=$(mktemp -u)   # -u: a name, not a file — its appearance is the signal
 python3 "$REPO/eval/record_frames.py" --in-topic "$BENCH_LIDAR_TOPIC" --odom "$ODOM" \
@@ -354,8 +382,31 @@ rm -f "$FRAMES_READY"
 # being interruptible. `wait` instead returns immediately when a trapped signal arrives.
 echo "playing ${#BAGS[@]} bag(s) at rate ${RATE}x ..."
 rosbag play --clock -r "$RATE" "${BAGS[@]}" & PLAY_PID=$!
+
+# Stop playing a run that has already blown up. Measured on the results in this repo, the
+# systems that diverge mostly do it early — faster-lio at ~27 s of a 50 min ELDORADO
+# playback, BIEVR-LIO at 6.4 s — and every one of those runs currently plays to the end.
+#
+# A separate watcher rather than a poll loop in place of `wait "$PLAY_PID"`, and that line
+# is deliberately untouched: bash defers a trapped signal until the running foreground
+# command returns, so polling in the foreground would delay INT/TERM by the sleep. This
+# script is PID 1 in the container and those traps are the only thing that makes
+# `docker stop` work at all — see the handlers above.
+#
+# INT reaches `rosbag play` only because roscpp installs a handler for it: a command
+# started asynchronously by a non-interactive shell inherits SIGINT as SIG_IGN, and a
+# child that never calls signal() is deaf to this kill. ros::init calls signal()
+# unconditionally, so a ROS node is not — which is also why cleanup() above has always
+# been able to stop playback this way.
+( while [ ! -e "$OUT/DIVERGED" ] && kill -0 "$PLAY_PID" 2>/dev/null; do sleep 0.5; done
+  if [ -e "$OUT/DIVERGED" ]; then
+    echo "run_system: trajectory diverged — stopping playback" >&2
+    kill -INT "$PLAY_PID" 2>/dev/null || true
+  fi ) & WATCH_PID=$!
+
 wait "$PLAY_PID"
 PLAY_EXIT=$?
+kill "$WATCH_PID" 2>/dev/null || true
 sleep 2
 
 # A system that dies mid-bag does not stop playback, so exit code and pose count alone score a

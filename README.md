@@ -106,6 +106,37 @@ meant to be the only place that says whether a system counts.
 | `RUN` | explicit run index, `FORCE=true` to overwrite it — only accepted when the batch is a single run |
 | `RVIZ` | `true` opens the system's rviz (needs `xhost +local:root` — see [Interactive shell](#interactive-shell-debugging)) |
 
+### Runs that fly away
+
+A LIO system that loses tracking does not stop; it keeps publishing odometry, and the
+trajectory grows to hundreds of kilometres. `eval/divergence.py` watches for that, live:
+`record_tum.py` feeds every pose to the detector as it records it, and when the rule fires
+it drops a `DIVERGED` file in the run directory, which `run_system.sh` sees and uses to stop
+playback. The run is recorded as `status: diverged` with the reason, and **the remaining
+repeats still run** — divergence is stochastic (BIEVR-LIO diverged on one of three runs of
+one dataset), so cutting the batch short would erase the failure rate, which is itself the
+measurement.
+
+**The rule.** A run is diverged when, inside any 2-second window of at least 5 steps, half
+the steps imply a speed over **40 m/s** between consecutive poses. Non-finite poses count
+as over-limit steps.
+
+The threshold is a constant in `eval/divergence.py`, not a flag or a config field. Across
+the 112 trajectories in `results/` the healthy runs top out at 24.6 m/s and the diverged
+ones start at 69.0 m/s, with nothing in between, on datasets from a 1.8 km underground
+drift to a 7.3 km road — because the limit bounds the *vehicle*, not the route. (That is
+the difference from `--split-at`, whose boundary is a dataset-dependent distance and so
+ships with no default.) Benchmarking something that is not a ground vehicle means changing
+that constant.
+
+**What it does not detect: drift.** A run that stays physically plausible and simply ends
+300 m off is not diverged — that is accuracy, and `gnss_ape_*` owns it. This catches the
+blow-up, nothing subtler.
+
+Detection also runs offline, over `trajectory.tum`, so `aggregate` reclassifies results
+recorded before any of this existed without replaying a bag. A diverged run is excluded
+from its group's statistics and listed under `## excluded` with its reason.
+
 A crashed run does not abort the batch — a crash *is* a data point here.
 Pre-flight checks (bag directory, preset file, built workspace, `RUN` vs batch size) all run
 before the first container starts, so a typo fails in a second rather than after twenty
@@ -205,6 +236,20 @@ GNSS reference, four more columns appear (`ape_horiz_m`, `ape_vert_m`, `end_err_
 `end_err_v_m`); everywhere else they are blank, which is the honest reading rather than a
 zero.
 
+Status precedence per run is **VOID > diverged > incomplete > ok**. A run the online
+detector aborted has low coverage *because playback was stopped*, so judging completion
+first would report the consequence and bury the cause; where both are true the reason names
+both (`… over 40 m/s at 1288.5s; also incomplete: trajectory coverage 65% of the bag`),
+which is what keeps an out-of-memory death visible on a run that also blew up. See
+[Runs that fly away](#runs-that-fly-away).
+
+The tables report every one of those as **`failed`** — `2 (1 failed)` in the `n` column,
+`FAILED` in `## excluded` — because a comparison table marks a cell that carries no result,
+and which way it failed is a sentence rather than a column. That sentence is right beside
+it: `FAILED  diverged: 52% of a 2s window over 40 m/s at 156.8s`. The distinction survives
+in `stats.json`, where `status` is still `diverged`, `failed` or `void` — it is a real one,
+since an OOM kill is fixed with more memory and a blow-up is not.
+
 Per `(system, preset)` it reports **median [min–max]** plus every run's raw value. Mean and
 standard deviation are deliberately absent: the distribution is bimodal, so a mean lands in
 the empty gap between the modes and describes an outcome no run produced. `--split-at` has no
@@ -286,6 +331,38 @@ Writes `results/<DS>/compare.pdf`. By default each `(system, preset)` contribute
 **median run** by `end_pos_m` (ten curves are unreadable); `ALL=true` draws every run, which is
 the view for inspecting the bimodal split itself. Median selection reads the `derived` block,
 so run `aggregate` first — groups without it fall back to all runs with a warning.
+
+A group with a healthy run is never represented by one that flew away, and a run that did is
+drawn **truncated to the moment it diverged**, labelled `…-FAILED-28s` — the same word the
+tables use, since the two are read side by side. Without that, evo's
+autoscaling turns every other system into a dot at the origin — one ELDORADO trajectory spans
+34,616 km vertically against fast_lio's 197 m. What is left is the part that was still a
+trajectory, which is worth seeing: faster-lio's first 25 s on that dataset are real. In
+`compare_gnss.pdf` these are drawn grey and dashed, and the truncation matters more there
+still — that figure aligns with a whole-trajectory Umeyama fit, which a runaway curve would
+drag, taking every other curve's error with it.
+
+Every curve carries a filled circle where it starts and a `×` where it ends, on both
+figures. All six start at the same point here — `--align_origin` puts them there — so
+direction is the only thing separating them, and a truncated run stops in open ground where
+it otherwise reads as an unattached start rather than a run cut short. It is an evo setting
+rather than a flag, so `compare` writes it into a throwaway config under a temporary `HOME`;
+your own `~/.evo` is left alone.
+
+`compare_gnss.pdf` draws the plan view **twice**, under the two alignments it already
+maintained for its other pages, because they answer different questions:
+
+* **whole-run Umeyama** — the APE convention, so this is the page that corresponds to
+  `gnss_ape_*` in `stats.txt`. The fit splits each run's error between its two ends, which
+  is why the starts do not coincide here: measured on OPENROAD_20260325 it puts the six
+  starts up to **300 m** from the reference's. How far each was pushed is itself a reading.
+* **aligned on the opening 100 m** — every trajectory leaves the reference's own start
+  (within 0.8 m on that dataset) and the drift fans out from there. This is the view for
+  "how did it go wrong", and it exposes what a whole-run fit averages away.
+
+A run truncated where it blew up can be too short to contain that opening travel — one
+survives 32.6 s, before the vehicle has covered 100 m. It is left off the opening-aligned
+pages only, and named on them, rather than withholding those pages from every other system.
 
 The default view is the plan one: these are ground-vehicle routes on near-flat ground, so a
 3D view spends most of its third axis on vertical error.

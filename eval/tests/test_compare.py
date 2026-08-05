@@ -3,19 +3,29 @@ import json
 import compare
 
 
-def make_run(root, system, preset, name, end_pos=None):
+def make_run(root, system, preset, name, end_pos=None, diverged_at=None, poses=None):
     run = root / system / preset / name
     run.mkdir(parents=True)
-    (run / "trajectory.tum").write_text("0 0 0 0 0 0 0 1\n")
+    (run / "trajectory.tum").write_text(
+        "".join("{:.6f} {} {} {} 0 0 0 1\n".format(t, x, y, z)
+                for t, x, y, z in poses)
+        if poses is not None
+        else "0 0 0 0 0 0 0 1\n"
+    )
     metrics = {"system": system, "preset": preset}
+    derived = {}
     if end_pos is not None:
-        metrics["derived"] = {"end_pos_m": end_pos}
+        derived["end_pos_m"] = end_pos
+    if diverged_at is not None:
+        derived["diverged_at_s"] = diverged_at
+    if derived:
+        metrics["derived"] = derived
     (run / "metrics.json").write_text(json.dumps(metrics))
     return run
 
 
 def labels(picks):
-    return [label for label, _ in picks]
+    return [p.label for p in picks]
 
 
 def test_each_group_contributes_only_its_median_run(tmp_path):
@@ -130,3 +140,114 @@ def test_a_report_with_no_verdict_field_is_treated_as_unusable(tmp_path):
     p = tmp_path / "gnss_ref.json"
     p.write_text(json.dumps({"n_fixes": 10}))
     assert compare.reference_verdict(p) == "unusable"
+
+
+# --- diverged runs -----------------------------------------------------------------
+
+
+def test_a_diverged_run_never_represents_a_group_that_has_a_healthy_one(tmp_path):
+    # By end_pos_m alone run02 is the median of 5 / 30 / 900000 and would be drawn. It is
+    # the run that blew up, so the group is represented by a survivor instead.
+    make_run(tmp_path, "fast_lio", "default", "run01", 5.0)
+    make_run(tmp_path, "fast_lio", "default", "run02", 30.0, diverged_at=12.0)
+    make_run(tmp_path, "fast_lio", "default", "run03", 900000.0, diverged_at=8.0)
+    assert labels(compare.pick_runs(tmp_path, False, set())) == ["fast_lio-default-run01"]
+
+
+def test_a_group_of_only_diverged_runs_is_still_drawn_and_marked(tmp_path):
+    # Dropping it entirely would make a system that ran and failed look like one that was
+    # never run — the same reason disabled systems get a line of their own.
+    make_run(tmp_path, "faster_lio", "default", "run01", 5.0, diverged_at=27.6)
+    make_run(tmp_path, "faster_lio", "default", "run02", 9.0, diverged_at=26.2)
+    picks = compare.pick_runs(tmp_path, False, set())
+    assert labels(picks) == ["faster_lio-default-run01-FAILED-28s"]
+    assert picks[0].diverged_at_s == 27.6
+
+
+def test_the_label_carries_the_moment_it_blew_up(tmp_path):
+    # FAILED to match aggregate's tables — a figure and a table are read side by side, and
+    # two words for one outcome make the pair look like two outcomes.
+    make_run(tmp_path, "faster_lio", "default", "run01", 5.0, diverged_at=188.1)
+    assert labels(compare.pick_runs(tmp_path, False, set())) == [
+        "faster_lio-default-run01-FAILED-188s"
+    ]
+
+
+def test_a_healthy_run_carries_no_failure_marker(tmp_path):
+    make_run(tmp_path, "fast_lio", "default", "run01", 5.0)
+    pick = compare.pick_runs(tmp_path, False, set())[0]
+    assert pick.diverged_at_s is None
+    assert "FAILED" not in pick.label
+
+
+def test_all_draws_diverged_runs_too(tmp_path):
+    # ALL=true means every run, including the ones that failed — that mode exists to look
+    # at the spread, and the failures are part of it.
+    make_run(tmp_path, "fast_lio", "default", "run01", 5.0)
+    make_run(tmp_path, "fast_lio", "default", "run02", 30.0, diverged_at=12.0)
+    assert len(compare.pick_runs(tmp_path, True, set())) == 2
+
+
+# --- truncation --------------------------------------------------------------------
+
+
+def test_truncation_keeps_the_poses_up_to_the_moment_it_blew_up(tmp_path):
+    src = tmp_path / "trajectory.tum"
+    src.write_text("".join("{:.6f} {} 0 0 0 0 0 1\n".format(i * 0.1, i)
+                           for i in range(100)))
+    dst = tmp_path / "staged.tum"
+    compare._stage_truncated(src, dst, 2.0)
+    lines = dst.read_text().splitlines()
+    assert len(lines) == 21          # t = 0.0 .. 2.0 inclusive, at 10 Hz
+    assert lines[-1].startswith("2.000000")
+
+
+def test_truncation_is_measured_from_the_first_pose_not_from_zero(tmp_path):
+    # Trajectory timestamps are bag time, which starts wherever the recording did.
+    src = tmp_path / "trajectory.tum"
+    src.write_text("".join("{:.6f} {} 0 0 0 0 0 1\n".format(1774441874.0 + i * 0.1, i)
+                           for i in range(100)))
+    dst = tmp_path / "staged.tum"
+    compare._stage_truncated(src, dst, 1.0)
+    assert len(dst.read_text().splitlines()) == 11
+
+
+def test_truncation_preserves_the_quaternion_columns(tmp_path):
+    # compare.pdf has an attitude page; dropping the rotation would empty it.
+    src = tmp_path / "trajectory.tum"
+    src.write_text("0.0 1 2 3 0.1 0.2 0.3 0.4\n1.0 4 5 6 0.5 0.6 0.7 0.8\n")
+    dst = tmp_path / "staged.tum"
+    compare._stage_truncated(src, dst, 10.0)
+    assert dst.read_text().splitlines()[0].split()[4:] == ["0.1", "0.2", "0.3", "0.4"]
+
+
+def test_truncation_drops_a_partial_final_line(tmp_path):
+    # A run killed mid-write leaves one, and it must not reach evo.
+    src = tmp_path / "trajectory.tum"
+    src.write_text("0.0 1 2 3 0 0 0 1\n0.1 4 5 6 0 0 0 1\n0.2 7 8")
+    dst = tmp_path / "staged.tum"
+    compare._stage_truncated(src, dst, 10.0)
+    assert len(dst.read_text().splitlines()) == 2
+
+
+# --- start / end markers -----------------------------------------------------------
+
+
+def test_markers_are_configured_under_a_throwaway_home(tmp_path, monkeypatch):
+    # Never the invoking user's ~/.evo: this is a plot script, and changing how every
+    # other evo command on the machine behaves is not its business.
+    calls = []
+    monkeypatch.setattr(compare, "_run", lambda argv, **kw: calls.append((argv, kw)) or 0)
+    env = {"HOME": "/home/someone"}
+    compare._start_end_markers(env, tmp_path)
+    argv, _ = calls[0]
+    assert argv[:2] == ["evo_config", "set"]
+    assert "plot_start_end_markers" in argv
+    assert env["HOME"] == str(tmp_path / "evo-home")
+    assert (tmp_path / "evo-home").is_dir()
+
+
+def test_a_config_failure_costs_the_markers_and_nothing_else(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(compare, "_run", lambda argv, **kw: 1)
+    compare._start_end_markers({}, tmp_path)
+    assert "without them" in capsys.readouterr().err

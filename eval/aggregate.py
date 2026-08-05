@@ -13,6 +13,7 @@ import statistics
 import sys
 from pathlib import Path
 
+import divergence
 import registry
 
 NO_RESOURCE = {
@@ -60,9 +61,20 @@ class MalformedRun(Exception):
 def load_run(run_dir, min_coverage=DEFAULT_MIN_COVERAGE):
     """Read one run directory into a record: its metrics.json plus status + derived.
 
-    Status precedence: a human VOID verdict outranks the automatic checks, because a
-    run can exit cleanly and still be worthless (a starved run once exited 0 after
-    the map was starved).
+    Status precedence — VOID > diverged > incomplete > ok:
+
+      * a human VOID verdict outranks every automatic check, because a run can exit
+        cleanly and still be worthless (a starved run once exited 0 after the map was
+        starved);
+      * divergence outranks the completion checks because a run aborted mid-bag by the
+        online detector has low coverage *by construction* — that is what killing playback
+        does. Judged the other way round, every aborted run would report "coverage 43% of
+        the bag, below 90%", which states the consequence and hides the cause.
+
+    The cost of that ordering, stated rather than hidden: a run killed by the OOM reaper
+    that also produced a sustained burst of implausible poses reads as diverged rather
+    than as a crash. The sustained-window rule keeps a single bad pose from doing this,
+    but the ordering has this consequence and no check here can tell the two apart.
     """
     run_dir = Path(run_dir)
     try:
@@ -76,7 +88,20 @@ def load_run(run_dir, min_coverage=DEFAULT_MIN_COVERAGE):
     void = run_dir / "VOID"
     if void.exists():
         rec["status"] = "void"
-        rec["void_reason"] = void.read_text().strip().splitlines()[0].strip()
+        rec["void_reason"] = _marker_reason(void)
+        return rec
+
+    reason = _divergence_failure(rec, run_dir)
+    if reason:
+        rec["status"] = "diverged"
+        # Both facts, not just the one that won. PV-LIO on ELDORADO is the case that
+        # forced this: its unbounded map was OOM-killed on all three runs (26-41 GB) and
+        # the trajectory blew up as it died. "diverged" alone would have quietly retired
+        # the record of an out-of-memory failure that is the more actionable of the two.
+        also = _completion_failure(rec, min_coverage)
+        if also:
+            reason = "{}; also incomplete: {}".format(reason, also)
+        rec["fail_reason"] = reason
         return rec
 
     reason = _completion_failure(rec, min_coverage)
@@ -84,6 +109,41 @@ def load_run(run_dir, min_coverage=DEFAULT_MIN_COVERAGE):
     if reason:
         rec["fail_reason"] = reason
     return rec
+
+
+def _divergence_failure(rec, run_dir):
+    """Why this run's trajectory blew up, or None if it did not.
+
+    Two sources, and the DIVERGED marker is not redundant with the scan. The scan runs on
+    every run anyway — v_max_mps belongs in `derived` whatever the verdict — so it alone
+    would classify every diverged run correctly. What the marker adds is that the run was
+    *aborted*, which is the only thing that explains its coverage: a run stopped at 30% of
+    the bag and a run that played to the end and blew up at 90% both read "diverged", and
+    only one of them is missing most of its route.
+
+    Reading the scan as well as the marker is what lets results recorded before any of
+    this existed be reclassified by re-running aggregate, without replaying a single bag.
+    """
+    marker = run_dir / "DIVERGED"
+    scanned = (rec.get("derived") or {}).get("diverged_reason")
+    if marker.exists():
+        noted = _marker_reason(marker)
+        return "aborted mid-run: {}".format(noted or scanned or "detector fired")
+    return scanned
+
+
+def _marker_reason(path):
+    """The first line of a VOID / DIVERGED marker, or "" when it says nothing.
+
+    Empty rather than an exception: the marker's existence is the signal and its content
+    is the courtesy. `touch VOID` is a reasonable thing for a human to do in a hurry, and
+    it must not crash the aggregation of every other run in the dataset.
+    """
+    try:
+        lines = path.read_text().strip().splitlines()
+    except OSError:
+        return ""
+    return lines[0].strip() if lines else ""
 
 
 def _completion_failure(rec, min_coverage):
@@ -154,6 +214,11 @@ def _derive(run_dir, bag_start=None, bag_end=None):
         derived = trajectory_stats(run_dir / "trajectory.tum")
     except (OSError, InsufficientTrajectory):
         return {}
+    # A second read of trajectory.tum rather than a shared parse: divergence.py owns its
+    # own tolerant reader (a run killed mid-write ends in a partial line, and that run's
+    # verdict is exactly what it is for), and one pass over a 1 MB file is not worth
+    # coupling the two modules' parsing.
+    derived.update(divergence.scan(run_dir / "trajectory.tum"))
     derived.update(_gnss_ape(run_dir))
     csv = run_dir / "resource.csv"
     try:
@@ -714,6 +779,9 @@ PERF_LEGEND = (
 # Summarized into stats.json but kept out of the tables, which are already as wide as a
 # terminal allows.
 JSON_ONLY_METRICS = (
+    # Summarized across a group's ok runs, where it reads as the fastest the vehicle was
+    # ever measured to move — a sanity check on the limit that defines divergence at all.
+    "v_max_mps",
     "lag_growth_ms",
     "sensor_hz",
     "rate_actual",
@@ -850,7 +918,7 @@ def render_text(dataset, stats, disabled=()):
         for label, e in excluded:
             out.append(
                 "{:<{w}}  {:<7} {}".format(
-                    label, e["status"].upper(), e["reason"] or e["run_dir"] or "",
+                    label, _displayed(e["status"]).upper(), _excluded_reason(e),
                     w=width,
                 )
             )
@@ -968,10 +1036,36 @@ def _table(rows):
     ]
 
 
+# How a status is *reported* in the tables, where it is not how it is *recorded*. A
+# comparison table marks a cell that carries no result, and one word does that job — the
+# way this field's tables have always marked one. Which way a run failed is a sentence,
+# and it goes in the reason beside it rather than into the count.
+#
+# `status` in the records and in stats.json keeps the distinction, because the distinction
+# is real and measured: PV-LIO was OOM-killed at 23% of one bag with a perfectly plausible
+# trajectory, and blew up to a 3851 km path on another. One is fixed with more memory and
+# the other is not, so anything reading stats.json can still tell them apart.
+DISPLAY_STATUS = {"diverged": "failed"}
+# void first: a human verdict outranks the automatic ones, here as in load_run.
+DISPLAY_ORDER = ("void", "failed")
+
+
+def _displayed(status):
+    return DISPLAY_STATUS.get(status, status)
+
+
+def _excluded_reason(entry):
+    """The reason as the tables show it, naming the failure mode the count dropped."""
+    reason = entry["reason"] or entry["run_dir"] or ""
+    if _displayed(entry["status"]) != entry["status"]:
+        return "{}: {}".format(entry["status"], reason)
+    return reason
+
+
 def _n_cell(s):
     notes = []
-    for status in ("void", "failed"):
-        count = sum(1 for e in s["excluded"] if e["status"] == status)
+    for status in DISPLAY_ORDER:
+        count = sum(1 for e in s["excluded"] if _displayed(e["status"]) == status)
         if count:
             notes.append("{} {}".format(count, status))
     if s["no_spread"]:
