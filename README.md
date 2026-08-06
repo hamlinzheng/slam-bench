@@ -383,9 +383,21 @@ maintained for its other pages, because they answer different questions:
   `gnss_ape_*` in `stats.txt`. The fit splits each run's error between its two ends, which
   is why the starts do not coincide here: measured on OPENROAD_20260325 it puts the six
   starts up to **300 m** from the reference's. How far each was pushed is itself a reading.
-* **aligned on the opening 100 m** — every trajectory leaves the reference's own start
+* **yaw-aligned on the opening 100 m** — every trajectory leaves the reference's own start
   (within 0.8 m on that dataset) and the drift fans out from there. This is the view for
   "how did it go wrong", and it exposes what a whole-run fit averages away.
+
+  Only the **yaw** is fitted on the opening, and the vertical is offset rather than fitted.
+  Up is defined by gravity, the whole-run fit already agrees with the reference about it,
+  and an opening segment has nothing worth hearing to say about it: 100 m of *path* at the
+  start is 43–99 m of net displacement on these routes, so fitting a full rotation to it
+  came out 11–75° tilted, and that tilt levered along a 3–7 km route drew **59–1896 m** of
+  vertical RMSE where the whole-run fit reads 14–113. Six independent systems agreed on
+  that error to within 5% while their real vertical errors differed threefold, which is how
+  it was caught — the number was the alignment's, not theirs. With yaw only, the
+  opening-aligned vertical error lands at 1.0–2.1× the whole-run figure, which is the shape
+  drift-from-a-pinned-start should have, and the result barely moves between a 20 m and a
+  1000 m window where the full fit swung 27×.
 
 A run truncated where it blew up can be too short to contain that opening travel — one
 survives 32.6 s, before the vehicle has covered 100 m. It is left off the opening-aligned

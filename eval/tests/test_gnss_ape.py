@@ -148,3 +148,52 @@ def test_every_ape_key_has_a_null_counterpart():
     produced = gnss_ape.ape(_write_tum(d / "r.tum", pts), _write_tum(d / "e.tum", pts))
     assert set(produced) == set(gnss_ape.NO_APE)
     assert all(v is None for v in gnss_ape.NO_APE.values())
+
+
+# --- the opening alignment ---------------------------------------------------------
+
+import numpy as np  # noqa: E402
+
+import plot_gnss  # noqa: E402
+
+
+def _straightish(n=600, rise=0.005):
+    """A route heading east while climbing gently, as a ground vehicle does."""
+    t = np.arange(n, dtype=float)
+    return np.stack([t, 0.05 * t, rise * t], axis=1)
+
+
+def test_the_opening_correction_never_tips_the_trajectory(tmp_path):
+    # The whole point: pitch and roll come from the whole-run fit, which has kilometres to
+    # determine them with. The opening may turn the result and shift it, nothing else.
+    ref = _straightish()
+    rot, shift = plot_gnss._opening_correction(ref + [3.0, -2.0, 7.0], ref, 40)
+    # A yaw-only rotation leaves the vertical axis exactly where it was.
+    assert rot[2, 2] == pytest.approx(1.0)
+    assert rot[2, :2] == pytest.approx([0.0, 0.0])
+    assert rot[:2, 2] == pytest.approx([0.0, 0.0])
+
+
+def test_the_opening_correction_removes_a_pure_yaw(tmp_path):
+    ref = _straightish()
+    th = np.radians(30.0)
+    spin = np.array([[np.cos(th), -np.sin(th), 0], [np.sin(th), np.cos(th), 0], [0, 0, 1]])
+    turned = (spin @ ref.T).T + [10.0, -5.0, 2.0]
+    rot, shift = plot_gnss._opening_correction(turned, ref, 60)
+    assert (rot @ turned.T).T + shift == pytest.approx(ref, abs=1e-6)
+
+
+def test_a_vertical_offset_is_removed_without_fitting_a_slope(tmp_path):
+    # Up is defined by gravity and both frames already agree on it; the opening is only
+    # allowed to say where zero is, not which way is up.
+    ref = _straightish()
+    rot, shift = plot_gnss._opening_correction(ref + [0.0, 0.0, 12.0], ref, 50)
+    assert np.allclose(rot, np.eye(3), atol=1e-9)
+    assert shift[2] == pytest.approx(-12.0, abs=1e-6)
+
+
+def test_the_correction_does_not_mirror_a_poorly_spread_opening(tmp_path):
+    # Kabsch without the reflection guard can "fit" by mirroring, which is not a pose.
+    ref = _straightish()
+    rot, _ = plot_gnss._opening_correction(ref * [1, -1, 1], ref, 30)
+    assert np.linalg.det(rot) == pytest.approx(1.0)

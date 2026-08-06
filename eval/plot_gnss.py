@@ -42,10 +42,13 @@ def main():
         "--align-metres", type=float, default=100.0,
         # By distance, not by pose count. On one outdoor route the opening 200 poses
         # cover 1.75 m — the vehicle stands still for the first 20 s — which leaves yaw
-        # unconstrained, rotates the whole trajectory and made every error on the
-        # origin-aligned page enormous. Once there is real motion the fit is stable:
-        # 20 m and 1000 m of opening travel put the same run within 3.5 m of each other.
-        help="opening travel used for the origin-aligned view; 0 disables that page",
+        # unconstrained and rotates the whole trajectory.
+        #
+        # Only the yaw is fitted here (see _opening_correction), and yaw needs far less
+        # than a full rotation does: measured across the three referenced datasets, the
+        # vertical error moves by under 2x between a 20 m and a 1000 m window, where
+        # fitting the full rotation swung it 27x over the same range.
+        help="opening travel the yaw alignment is fitted on; 0 disables those pages",
     )
     ap.add_argument(
         "--diverged", default="",
@@ -113,12 +116,12 @@ def main():
         missing = _omitted(series, opening)
         if opening:
             _plan_page(pdf, plt, opening, ref_p, "xyz0", diverged, colours,
-                       "GNSS-referenced overlay — aligned on the opening {:g} m\n"
+                       "GNSS-referenced overlay — yaw-aligned on the opening {:g} m\n"
                        "the starts coincide and the drift fans out from them".format(
                            args.align_metres) + missing + sub)
             pages += 1
 
-        # 3. each axis against time, origin-aligned. A whole-run fit offsets each start
+        # 3. each axis against time, opening-aligned. A whole-run fit offsets each start
         # by 19-35 m vertically on this route — more than the 14 m the ground rises — so
         # the up panel would show the fit rather than the terrain.
         #
@@ -137,7 +140,7 @@ def main():
             axs[0].legend(loc="upper right", fontsize=8, ncol=2)
             axs[-1].set_xlabel("time (s)")
             axs[0].set_title(
-                "Position against time \u2014 aligned on the opening {:g} m".format(
+                "Position against time \u2014 yaw-aligned on the opening {:g} m".format(
                     args.align_metres) + missing + sub, fontsize=10)
             fig.tight_layout(); pdf.savefig(fig); plt.close(fig)
             pages += 1
@@ -166,7 +169,7 @@ def main():
             axs[0].legend(loc="upper right", fontsize=8, ncol=2)
             axs[-1].set_xlabel("time (s)")
             axs[0].set_title(
-                "Error against the reference, per axis \u2014 aligned on the opening "
+                "Error against the reference, per axis \u2014 yaw-aligned on the opening "
                 "{:g} m\ndrift from the start: the starts coincide and the ends fan out"
                 .format(args.align_metres) + missing + sub, fontsize=10)
             fig.tight_layout(); pdf.savefig(fig); plt.close(fig)
@@ -293,6 +296,13 @@ def _prepare(spec, ref_t, ref_p, t_max_diff, align_metres=0.0):
     idx = np.clip(np.searchsorted(ref_t, ts), 1, len(ref_t) - 1)
     pick = np.where(np.abs(ref_t[idx] - ts) < np.abs(ref_t[idx - 1] - ts), idx, idx - 1)
     keep = np.abs(ref_t[pick] - ts) <= t_max_diff
+
+    # Everything below starts from the whole-run fit, which is well conditioned: it has
+    # kilometres of trajectory to determine the rotation with. The opening alignment then
+    # only *turns* that result, and never tips it — see _opening_correction.
+    aligned_src = (r @ src.T).T + t
+    aligned_ps = (r @ ps.T).T + t
+
     err0 = xyz0 = None
     if align_metres > 0:
         travelled = np.concatenate(
@@ -300,18 +310,52 @@ def _prepare(spec, ref_t, ref_p, t_max_diff, align_metres=0.0):
         )
         n = int(np.searchsorted(travelled, align_metres)) + 1
         if n < len(src):
-            r0, t0 = umeyama(src[:n], dst[:n])
-            err0 = (r0 @ src.T).T + t0 - dst
-            xyz0 = (r0 @ ps.T).T + t0
+            r0, t0 = _opening_correction(aligned_src, dst, n)
+            err0 = (r0 @ aligned_src.T).T + t0 - dst
+            xyz0 = (r0 @ aligned_ps.T).T + t0
     return {
         "label": label,
         "t": ts,
-        "xyz": (r @ ps.T).T + t,
+        "xyz": aligned_ps,
         "t_err": ts[keep],
-        "err": (r @ src.T).T + t - dst,
+        "err": aligned_src - dst,
         "err0": err0,
         "xyz0": xyz0,
     }
+
+
+def _opening_correction(aligned, dst, n):
+    """Yaw and translation that put the opening `n` poses onto the reference's.
+
+    Yaw only, deliberately. Fitting a full rotation to the opening instead — which is what
+    this did — leaves pitch and roll almost unconstrained, because an opening segment is
+    short and nearly planar, and the vertical error that follows is enormous. Measured on
+    the three referenced datasets here: 100 m of *path* at the start is 43-99 m of net
+    displacement, the fitted rotation comes out 11-75 deg tilted, and levered along a
+    3-7 km route that drew 59-1896 m of vertical RMSE where the whole-run fit reads 14-113.
+    Six independent systems agreed on that error to within 5% while their real vertical
+    errors differed threefold, which is how it was caught: the number was the alignment's,
+    not theirs.
+
+    Vertical is not fitted at all, only offset. Up is defined by gravity, both the ENU
+    reference and the whole-run fit already agree on it, and a few tens of metres of
+    opening travel has nothing to say about it that is worth hearing.
+    """
+    a, b = aligned[:n, :2], dst[:n, :2]
+    ca, cb = a.mean(axis=0), b.mean(axis=0)
+    h = (a - ca).T @ (b - cb)
+    u, _, vt = np.linalg.svd(h)
+    # The reflection guard Kabsch needs: without it a poorly-spread opening can "fit" by
+    # mirroring the route, which is not a pose.
+    flip = np.sign(np.linalg.det(vt.T @ u.T))
+    r2 = vt.T @ np.diag([1.0, flip]) @ u.T
+
+    rot = np.eye(3)
+    rot[:2, :2] = r2
+    shift = np.zeros(3)
+    shift[:2] = cb - r2 @ ca
+    shift[2] = dst[:n, 2].mean() - aligned[:n, 2].mean()
+    return rot, shift
 
 
 def _floors(rep):
